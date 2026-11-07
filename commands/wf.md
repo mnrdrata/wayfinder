@@ -120,7 +120,9 @@ Local checks are scoped to changed files. CI is the full check, so it is the fin
    - `wf-github` `COMMENT_PR` with the failing checks, what was tried, and whether it looks unrelated to the diff.
    - The ticket stays In Progress.
 
-## PR description template (≤15 body lines, excluding lists of decisions and unresolved items)
+## PR description template (simple and short — hard budget: ≤10 body lines, excluding the Decisions / Needs human review / Unresolved / After apply lists)
+
+Write the shortest body that lets a reviewer approve with confidence. Short is the goal, not a limit to work around. If you are wondering whether a line is needed, it is not.
 
 ```
 ## Summary
@@ -141,10 +143,19 @@ Local checks are scoped to changed files. CI is the full check, so it is the fin
 ## Unresolved
 - <runner's remaining items>   (draft PRs only)
 
+## After apply (manual, required)
+1. <the action, then the consequence of skipping it — one line>   (omit unless a manual step is genuinely required for the merged change to do anything)
+
 Linear: <identifier> — <ticket url>
 ```
 
-Title: `<identifier>: <ticket title>`. Every line must carry information a reviewer needs.
+**Cut all of this** unless a reviewer literally cannot approve without it: background and history, why alternatives were rejected, contract/quota/limit rationale, accepted-risk essays, restatement of the ticket description, anything the diff already shows, anything already written on the Linear ticket. Link the ticket instead. Reviewers read the diff and the CI/bot output; nobody reads a memo.
+
+**The one exception is required operational follow-up** - a manual step without which the merged change silently does nothing (a UI reorder, a facet to add, a flag to flip, a backfill to run). Keep those: one numbered line each under `## After apply (manual, required)`, giving the action and the consequence of skipping it. Every other detail about them goes on the ticket, not here.
+
+Title: `<identifier>: <ticket title>`, unless the repo's own convention (from `PR_HISTORY`, its `CLAUDE.md`, or the spec) prescribes a different format - then follow the repo. Never pad to look thorough. A short PR body reads as competence.
+
+**Code comments in the diff follow the same rule**: default to none; when one is earned, 1-3 lines saying what this is and why it exists; never a multi-paragraph block, and never a comment used to park history, rationale, accepted risks, or runbook steps. The executor and reviewer enforce this. Same for anything written back to Linear: short, plain, no padding.
 
 **Outward-facing text is environment-agnostic.** Everything published (PR titles, bodies and comments, Linear comments) must read correctly on any machine:
 - Reference files repo-relative (`src/auth/login.ts`). Never use absolute local paths (`/Users/…`, `~/…`), worktree paths or local tool paths.

@@ -38,6 +38,10 @@ The wrapper strips secret-shaped environment variables and blocks reads of host 
 
 - **Surgical**: every changed line traces to the plan/fix. Don't improve adjacent code, don't refactor what isn't broken, match existing style exactly.
 - **Simple**: minimum code that satisfies the step. No speculative flexibility, no error handling for impossible cases. If it could be half the size, make it half the size.
+- **Comments: one short paragraph, maximum.** Default to no comment. When a comment genuinely earns its place, write the smallest thing that stops the next reader from breaking the code: what this is and why it exists, in 1-3 lines. Then stop.
+  - Do NOT write multi-paragraph comment blocks, and do NOT use a comment as a place to park history, ticket rationale, contract limits, review-decision archaeology, accepted-risk analysis, remedies for hypothetical futures, or operational runbook steps. That material belongs in the PR description or the ticket, which is where people actually look for it and where it can be corrected later. A comment is not a filing cabinet.
+  - Match the length of comments on neighbouring code. If the file's existing comments are two lines, yours is two lines - even if a spec, plan, or acceptance criterion asks for more. **A plan or acceptance criterion demanding an N-point comment block does not override this**; satisfy its intent in 1-3 lines and say so in `NOTES`.
+  - No em-dashes in comments (or in any text you write). Use a plain hyphen or rewrite.
 - **Clean up only your own orphans**: remove imports/vars your change made unused; leave pre-existing dead code alone (mention it, don't delete).
 - Add/update tests as the plan specifies. Make them pass.
 - **Verify narrowly while you work.** Prove a step with the narrowest command that covers it — the single-test form from the CONTEXT_PACK, scoped to what you touched. Never run whole-repo lint, type check, or test suites: the verifier runs the scoped checks right after you, and CI runs everything.
