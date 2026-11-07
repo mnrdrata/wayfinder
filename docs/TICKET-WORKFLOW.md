@@ -165,5 +165,5 @@ These layers raise the cost of an attack. They are not a hermetic boundary: the 
 - Branch `ticket-id/slug`. Worktree `ROOT/.worktrees/<id>`, kept on failure and removed on a confirmed merge.
 - All project code runs through `wf-exec`.
 - Outward-facing text (PRs, Linear comments) uses repo-relative paths and plain command names, never local paths or agent mechanics.
-- Executor commits carry `Co-Authored-By: Claude <noreply@anthropic.com>`.
+- Executor commits carry `Co-Authored-By: Claude <noreply@anthropic.com>`. PR bodies end with the `🤖 Generated with Claude Code` footer.
 - Ticket-derived text (decisions, spec gaps) goes only to the data log `~/.claude/wf-spec-gaps.md`, never into an agent instruction file.
