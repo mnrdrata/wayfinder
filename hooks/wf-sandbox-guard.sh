@@ -15,15 +15,6 @@ case "$cmd" in
   *) exit 0 ;;
 esac
 
-# Raw network/exfil binaries: the obvious channel for an injected ticket to send data out
-# (matters most for the opus planner/spec-builder). The sandbox allows network so installs
-# work, so wrapping does NOT make these safe — they are blocked wrapped or not. git/gh are
-# excluded by design (they need network and run unwrapped).
-if printf '%s' "$cmd" | grep -Eq '(^|[ &|;(`$])(curl|wget|nc|ncat|netcat|telnet|ssh|scp|sftp|ftp|rsync)([ ]|$)'; then
-  echo "Blocked by workflow sandbox guard: raw network tools are not allowed in workflow worktrees, wrapped or not." >&2
-  exit 2
-fi
-
 # Already sandboxed → allow.
 case "$cmd" in
   *wf-exec*|*sandbox-exec*) exit 0 ;;
@@ -32,7 +23,16 @@ esac
 # Risky execution patterns: package managers, test runners, build tools, interpreters.
 # git/gh are intentionally NOT listed — they need network and run unsandboxed.
 if printf '%s' "$cmd" | grep -Eq '(^|[ &|;(`$])(npm|pnpm|yarn|bun|npx|node|deno|python|python3|pip|pip3|pytest|tox|jest|vitest|mocha|go|cargo|make|cmake|mvn|gradle|bundle|rake|composer|dotnet|ruby|rails|flutter|dart)([ ]|$)'; then
-  echo "Blocked by workflow sandbox guard: run project build/test/install commands through the sandbox so they cannot read credentials or secret env vars. Wrap with: $HOME/.claude/bin/wf-exec <command>" >&2
+  echo "Blocked by workflow sandbox guard: run project build/test/install commands through the sandbox so they cannot exfiltrate or read credentials. Wrap with: $HOME/.claude/bin/wf-exec <command>" >&2
+  exit 2
+fi
+
+# Raw network/exfil binaries: the obvious channel for an injected ticket to curl secrets
+# out (matters most for the opus planner/spec-builder, whose Bash isn't otherwise wrapped).
+# git/gh are excluded above by design; these have no place in sandboxed project code. Same
+# fail-open posture — under the sandbox these still work for loopback but can't reach egress.
+if printf '%s' "$cmd" | grep -Eq '(^|[ &|;(`$])(curl|wget|nc|ncat|netcat|telnet|ssh|scp|sftp|ftp|rsync)([ ]|$)'; then
+  echo "Blocked by workflow sandbox guard: network tools must run through the sandbox (no external egress) so they cannot exfiltrate. Wrap with: $HOME/.claude/bin/wf-exec <command>" >&2
   exit 2
 fi
 

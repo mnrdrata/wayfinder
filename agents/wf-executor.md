@@ -23,16 +23,19 @@ The plan includes a **CONTEXT_PACK** (files in play, patterns to follow, the rep
 ## Design handoff (`HANDOFF`, if provided)
 You may be given a `HANDOFF` path (or `none`) — an ingested design prototype/package describing how the change should look and behave. It lives **outside the worktree** and is **read-only**: Read it for visual/behavioral fidelity, but **never edit it, and never copy its files into the worktree** (it must not appear in your diff). It is **reference-only** — recreate the intent **idiomatically** using the repo's own widgets/patterns named in the CONTEXT_PACK; do **not** port or paste the handoff's HTML/CSS/JSX. Where the plan and the handoff conflict, the plan wins (it's grounded in this codebase).
 
-## Running project code (wrapped — required)
-Any command that executes the project's own code — tests, build, lint, typecheck, install, codegen, a dev/run command — **must** go through the wrapper, because project code (test files, `postinstall` hooks, dependencies) is attacker-influenceable:
+## Running project code (sandboxed — required)
+Any command that executes the project's own code — tests, build, lint, typecheck, install, codegen, a dev/run command — **must** go through the sandbox wrapper, because project code (test files, `postinstall` hooks, dependencies) is attacker-influenceable:
 
 ```
 cd "<worktree>" && ~/.claude/bin/wf-exec <command>
 ```
 
-The wrapper strips secret-shaped environment variables and blocks reads of host credential files. Network works, so package installs work. A `PreToolUse` guard rejects unwrapped project commands in a worktree. `git` runs normally (unwrapped). If `wf-exec` kills a command with `TIMEOUT`, list it under `TESTS` as not run — don't retry it as-is.
+The wrapper blocks external network egress and host-credential reads, and strips secret-shaped env vars (loopback + file writes still work). A `PreToolUse` guard rejects these commands in a worktree if you forget the wrapper. `git` runs normally (unwrapped). If a wrapped command hangs because it needs the network, `wf-exec` kills it after a timeout and prints `TIMEOUT` — treat that as "this step needs the network the sandbox denies," not as a flake to retry. List it under `TESTS` as not run.
 
-**Dependencies:** they are installed at worktree setup. If the plan needs a *new* dependency, add it with the repo's package manager through `wf-exec` (e.g. `npm install <pkg>`) so the manifest and lockfile change together in one commit, and name it in `NOTES`.
+**Dependencies (no network here):** dependencies are warmed *offline* from the local package cache at worktree setup. So:
+- **Never fetch or install here.** `npm install` / `pub get` / `bundle install` / `pip install` need the network and will hang until `wf-exec` times out. If the plan/fix needs a *new* dependency, add it to the manifest, do **not** install it, and flag it in `NOTES` so the human fetches it before merge (CI installs it with network).
+- **Use the offline / skip-resolution command form.** Many tools re-resolve dependencies over the network *before* running; use the variant that skips that — the forms the CONTEXT_PACK lists (e.g. `npm ci --offline`, `flutter test --no-pub`, `bundle install --local`). If a command still times out on resolution, re-invoke it with the tool's offline flag rather than retrying as-is.
+- **Local-only steps run normally** under `wf-exec` — compilation, code generation, and tests against already-resolved deps need no network.
 
 ## Rules (obey strictly)
 

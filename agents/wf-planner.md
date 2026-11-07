@@ -55,7 +55,7 @@ CONTEXT_PACK:
   - typecheck: `<scoped form, or "CI only" if the repo has only a whole-project check that is slow>`
   - test: `<cmd for the tests related to the changed files>` (single test: `<cmd>`)
   - install: `<cmd>`
-  Only commands that exist in this repo. Never a whole-repo lint/typecheck/e2e run on a large repo — CI runs those.
+  Give the **offline / skip-resolution** form of every command (`npm ci --offline`, `flutter test --no-pub`, `--frozen-lockfile`, …): project code runs in a sandbox with no external network. Only commands that exist in this repo. Never a whole-repo lint/typecheck/e2e run on a large repo — CI runs those.
 - repo rules: <instructions from CLAUDE.md/AGENTS.md that bind this change (e.g. "migrations need a down step"), or "none">
 - gotchas: <repo-specific traps relevant to this ticket, or "none">
 

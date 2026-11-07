@@ -132,11 +132,13 @@ A human verifies the result and moves it to Done. The workflow never sets Done.
 
 ## Security
 
-The workflow reads untrusted text (tickets, PR history) and runs attacker-influenceable code (tests, install hooks, dependencies). It is built so that this code cannot reach your secrets.
+The workflow reads untrusted text (tickets, PR history) and runs attacker-influenceable code (tests, install hooks, dependencies). It is built to break the "lethal trifecta": untrusted input, access to secrets, and a way to send data out.
 
-**The `wf-exec` wrapper.** Every project command (install, test, lint, build) runs through `~/.claude/bin/wf-exec`. It strips secret-shaped environment variables and runs the command under a macOS seatbelt profile. The profile blocks reads of credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `gh`/`git` config, `.npmrc`, `.netrc`). Network is allowed, because dependency installs need it.
+**The `wf-exec` sandbox.** Every project command (install, test, lint, build) runs through `~/.claude/bin/wf-exec`. It strips secret-shaped environment variables and runs the command under a macOS seatbelt profile. The profile blocks all external network egress (loopback still works for local tests). It also blocks reads of credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `gh`/`git` config, `.npmrc`, `.netrc`).
 
-**The guard hook.** `wf-sandbox-guard.sh` is a `PreToolUse` hook. It blocks unwrapped project commands inside worktrees. It also blocks raw network tools (`curl`, `wget`, `ssh`, …) in worktrees, wrapped or not. The Opus planner and spec-builder have no WebFetch.
+**Offline dependencies.** Because the sandbox has no network, `/wf` installs dependencies offline from your local package cache. A dependency the ticket adds goes into the manifest only; CI installs it.
+
+**The guard hook.** `wf-sandbox-guard.sh` is a `PreToolUse` hook. It blocks unwrapped project commands and raw network tools (`curl`, `wget`, `ssh`, …) inside worktrees. The Opus planner and spec-builder have no WebFetch.
 
 **Single-owner boundaries.** Only `wf-linear` and `wf-github` talk to external systems. A `SubagentStop` hook stops either one from answering without a real tool call.
 
@@ -146,7 +148,7 @@ The workflow reads untrusted text (tickets, PR history) and runs attacker-influe
 
 These layers raise the cost of an attack. They are not a hermetic boundary: the human PR review before merge is the real backstop.
 
-- **Network is open.** With credentials unreadable there is little to steal, but project code could still send repo source or local non-credential files out. Add deny entries to the seatbelt template for any other secret locations you use, such as `.env` files or cloud CLI caches.
+- **Writes can still carry data out.** Anything a sandboxed process can read, it can write into the worktree, and the PR push carries it out. Add deny entries to the seatbelt template for any other secret locations you use, such as `.env` files or cloud CLI caches.
 - **The guard matches on the command string.** It only fires on commands containing `/.worktrees/`, and it treats any command mentioning `wf-exec` as wrapped. The agent instructions cover the gaps.
 - **The Keychain is reachable.** The seatbelt profile does not block mach lookups to `securityd`.
 - **`wf-github` holds your `gh` token** and posts ticket-derived text. The pre-merge PR review is the control.

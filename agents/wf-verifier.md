@@ -13,11 +13,11 @@ You confirm the ticket is DONE in reality, not on paper. Goal-backward: start fr
 
 **Worktree paths:** you are not cwd'd in the worktree — your shell starts at the repo root. `cd "<worktree>"` for every command and use absolute paths under it for Read/Grep/Glob, or you'll verify the wrong tree.
 
-**Sandbox (required):** every command that runs project code — tests, lint, type check, build — goes through the wrapper, which strips secret env vars and blocks credential-file reads:
+**Sandbox (required):** every command that runs project code — tests, lint, type check, build — goes through the sandbox wrapper, which blocks external network and credential reads and strips secret env vars (loopback + writes still work, so local tests are fine):
 ```
 cd "<worktree>" && ~/.claude/bin/wf-exec <command>
 ```
-A `PreToolUse` guard rejects unwrapped project commands in a worktree. Plain `git` runs unwrapped. If `wf-exec` kills a command with `TIMEOUT`, record that check as `LEFT_TO_CI` — don't retry it as-is.
+A `PreToolUse` guard rejects unwrapped project commands in a worktree. Plain `git` runs unwrapped. Deps are pre-warmed offline at setup, so use the offline / skip-resolution forms from the CONTEXT_PACK (`--offline`, `--no-pub`, `--frozen-lockfile`, …). If `wf-exec` kills a command with `TIMEOUT` — usually an implicit dependency-resolution step that needs network, or a check too slow for local — retry once with the offline form if there is one; otherwise record it as `LEFT_TO_CI`. Never disable the sandbox.
 
 ## Local is scoped; CI is the full check
 

@@ -24,7 +24,7 @@ Drive each ticket in `$ARGUMENTS` from Linear to a GitHub PR that is ready for a
 - `git rev-parse --is-inside-work-tree` succeeds. If not, stop and tell the user to run from the target repo.
 - `gh auth status` succeeds, and `git remote get-url origin` points at github.com.
 - Linear is reachable: a `wf-linear` `FETCH <first identifier>` returns without `ERROR`.
-- `~/.claude/bin/wf-exec` is executable and `~/.claude/ticket-workflow-sandbox.sb` exists. All project code (install/test/build/lint) runs through `wf-exec`. It strips secret-shaped env vars and blocks reads of credential files. A `PreToolUse` guard enforces it.
+- `~/.claude/bin/wf-exec` is executable and `~/.claude/ticket-workflow-sandbox.sb` exists. All project code (install/test/build/lint) runs through `wf-exec`: no external network egress, no credential-file reads, secret-shaped env vars stripped. A `PreToolUse` guard enforces it.
 - `BASE` = `git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's@^origin/@@'` (fallback `main`/`master`). Run `git fetch origin`.
 - `ROOT` = `git rev-parse --show-toplevel`. Worktrees live in `ROOT/.worktrees/`. If `.worktrees/` isn't ignored (`git check-ignore -q .worktrees`), add `.worktrees/` to `ROOT/.git/info/exclude` (local only, no diff).
 
@@ -46,15 +46,15 @@ For each ticket, spawn `wf-linear` `FETCH <id>` **and** `READ_SPEC <id>` in one 
 - Branch `<identifier>/<BRANCH_SLUG>` (lowercase slug, identifier as Linear returns it). Worktree path `ROOT/.worktrees/<identifier>`.
 - **Resume:** if that path is already a registered worktree (`git worktree list`) on the matching branch, reuse it and keep its commits. If the path exists but is stale or on another branch, skip the ticket and report it. Never delete it.
 - Otherwise: `git worktree add "<path>" -b "<branch>" "origin/<BASE>"`. If the branch exists without a worktree, use `git worktree add "<path>" "<branch>"`.
-- **Install dependencies** through `wf-exec` from the worktree, using the repo's lockfile:
-  - `package-lock.json` → `npm ci`
-  - `pnpm-lock.yaml` → `pnpm install --frozen-lockfile`
-  - `yarn.lock` → `yarn install --frozen-lockfile`
-  - `requirements*.txt` / `pyproject.toml` → the repo's documented install, if any
-  - `pubspec.yaml` → `dart pub get`
-  - `Gemfile.lock` → `bundle install`
+- **Warm dependencies offline.** The sandbox has no external network, but most stacks install from a shared local cache that your normal builds keep warm. Run the stack's install with its **offline flag** through `wf-exec`, from the worktree:
+  - `package-lock.json` → `npm ci --offline` (or `--prefer-offline`)
+  - `pnpm-lock.yaml` → `pnpm install --frozen-lockfile --offline`
+  - `yarn.lock` → `yarn install --frozen-lockfile --offline`
+  - `pubspec.yaml` → `dart pub get --offline` (**not** `flutter pub get`, which reaches the network even with `--offline`)
+  - `Gemfile.lock` → `bundle install --local`
+  - Python → only with a local wheel cache (`pip install --no-index --find-links <cache> …`); otherwise skip.
 
-  Skip this when there's no manifest, or when the dependency dir already exists on a resume. It is best-effort: on failure, note it and continue. The verifier reports what it couldn't run, and CI is the full check. On large repos, raise the timeout: `WF_EXEC_TIMEOUT=1800`.
+  The offline flag is **required**: without it the tool probes the network and hangs until the `wf-exec` timeout. Skip this when there's no manifest, or when the dependency dir already exists on a resume. **Don't loop on failure:** if a package isn't cached (usually a dependency the ticket adds), note it once and continue. The executor flags it in `NOTES`, and CI installs it with network. To warm the cache, build the project once normally outside the workflow. On large repos, raise the timeout: `WF_EXEC_TIMEOUT=1800`.
 - **Worktree-path discipline — pass this rule to every agent:** every file operation targets the absolute worktree path. `Bash` commands `cd "<path>"` first. `Read`/`Edit`/`Write`/`Grep`/`Glob` use absolute paths under `<path>`. Repo-relative paths resolve to `ROOT`, the main checkout, which is the WRONG tree.
 
 ## 3. Plan (all tickets, concurrently — read-only)

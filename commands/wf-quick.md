@@ -11,7 +11,7 @@ A lightweight follow-up: make **one small, described change** on an **existing**
 **Hard boundaries (same spirit as `/wf`):**
 - Operates ONLY on an **existing** worktree — never creates a worktree or a new PR.
 - Never merges, never sets Linear **Done**, and does **not** change Linear status (the ticket is already In Review).
-- All project code runs sandboxed via `~/.claude/bin/wf-exec` (secret env vars stripped, credential files unreadable); `git`/`gh` run unwrapped.
+- All project code runs sandboxed via `~/.claude/bin/wf-exec` (no egress, no credential reads); `git`/`gh` run unwrapped.
 - Be surgical, simple, and goal-driven. **If the instruction implies broad / multi-area / new-scope work, STOP** and tell the user to run `/wf` instead — keep "quick" honest.
 
 ## Parse arguments

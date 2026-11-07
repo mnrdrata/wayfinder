@@ -29,7 +29,7 @@ an overview; when they disagree, the files win.
 |---|---|
 | `agents/wf-*.md` | 9 subagents: planner, executor, reviewer, verifier, runner, spec-builder, the Linear/GitHub boundary agents, and an eval judge |
 | `commands/wf*.md` | 5 slash commands: `/wf`, `/wf-spec`, `/wf-quick`, `/wf-eval`, `/wf-calibrate` |
-| `bin/wf-exec` | Runs a repo's install/tests/lint with secret env vars stripped and credential files unreadable |
+| `bin/wf-exec` | Runs a repo's install/tests/lint inside a no-network, no-secrets sandbox |
 | `bin/wf-fetch-handoff` | Safely downloads a Linear design-handoff embed (allowlisted, size-capped, zip-slip-guarded) |
 | `hooks/` | Two guard hooks: sandbox enforcement + boundary-agent tool-call enforcement |
 | `ticket-workflow-sandbox.sb.template` | macOS seatbelt profile (installer fills in your `$HOME`) |
@@ -49,10 +49,12 @@ an overview; when they disagree, the files win.
 - **Single-owner boundaries.** Only `wf-linear` touches Linear; only `wf-github`
   touches GitHub. A `SubagentStop` hook blocks either from finishing without a real
   tool call (no fabricated answers).
-- **Wrapped execution.** All project code runs through `wf-exec`. Secret-shaped env
-  vars (`*TOKEN*`, `*_KEY`, `AWS_*`, …) are stripped and credential files are
-  unreadable. A `PreToolUse` hook blocks unwrapped project code and raw network
-  tools (`curl`/`wget`/`ssh`/…) inside worktrees.
+- **Sandboxed execution.** All project code runs through `wf-exec`: no network
+  egress, no credential-file reads, and secret-shaped env vars (`*TOKEN*`, `*_KEY`,
+  `AWS_*`, …) stripped. Dependencies install offline from your local cache. A
+  `PreToolUse` hook blocks unwrapped project code and raw network tools
+  (`curl`/`wget`/`ssh`/…) inside worktrees. This breaks the "lethal trifecta"
+  (untrusted ticket text + repo secrets + exfiltration path).
 - **Never autonomous on irreversible steps.** No merging, no setting Done. A human
   always closes the loop.
 - **Model tiering is deliberate.** Opus for decisions/architecture/bug-catching,
@@ -138,8 +140,7 @@ defense-in-depth, not a guarantee — review PRs before merging.
 **Audit the sandbox deny-list against your own secrets.** The seatbelt profile is
 `(allow default)` with carve-outs, so it blocks reads of the *standard* credential
 stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, `~/.config/git`, `~/.netrc`).
-Network is allowed so dependency installs work, which makes this deny-list the main
-line of defense. If you keep secrets elsewhere (`.env` files in repos, a custom
+If you keep secrets elsewhere (`.env` files in repos, a custom
 `$CLOUDSDK_CONFIG` or other cloud-CLI cache, tokens outside `$HOME`), add matching
 `deny file-read*` entries to `ticket-workflow-sandbox.sb.template` before installing.
 

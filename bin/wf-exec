@@ -1,8 +1,10 @@
 #!/bin/bash
-# wf-exec — run project code inside the ticket-workflow execution sandbox.
-# Secret-shaped env vars are stripped and host credential files are unreadable. Network is
-# allowed (dependency installs need it). A watchdog kills the command if it runs longer than
-# WF_EXEC_TIMEOUT seconds (default 540, set 0 to disable) and says so clearly.
+# wf-exec — run a command inside the ticket-workflow execution sandbox.
+# No external network egress; host credential stores unreadable. Loopback + writes allowed.
+# A watchdog kills the command if it runs longer than WF_EXEC_TIMEOUT seconds (default 540,
+# set 0 to disable) and says so clearly — a hang here almost always means the command needs
+# the network the sandbox denies (e.g. `pub get`, `npm install`). Dependencies are warmed
+# offline at worktree setup, so a hang usually means a package isn't in the local cache.
 # Usage: wf-exec <command> [args...]   e.g.  wf-exec npm test
 set -uo pipefail
 
@@ -44,7 +46,7 @@ kill_tree() {
 cmd_pid=$!
 
 ( sleep "$TIMEOUT"
-  echo "wf-exec: TIMEOUT after ${TIMEOUT}s — killed. The command is too slow to run locally (leave it to CI) or is waiting on input. Override with WF_EXEC_TIMEOUT=<seconds>." >&2
+  echo "wf-exec: TIMEOUT after ${TIMEOUT}s — killed. Likely needs network the sandbox denies (e.g. pub get / npm install); deps are warmed offline at setup, so a hang here usually means a package isn't in the local cache. Override with WF_EXEC_TIMEOUT=<seconds>." >&2
   kill_tree "$cmd_pid" TERM
   sleep 5
   kill_tree "$cmd_pid" KILL
