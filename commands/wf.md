@@ -13,7 +13,7 @@ Drive each ticket in `$ARGUMENTS` from Linear to a GitHub PR that is ready for a
 - Every ticket ends in exactly one of these states:
   - **finished:** PR ready for review, CI green (or no CI configured), ticket **In Review**.
   - **needs a human:** draft PR (or no PR) with the reasons written on it and on the ticket, ticket stays **In Progress**.
-  - **parked:** questions posted on the ticket, ticket in **Needs Answers**.
+  - **parked:** questions posted on the ticket, ticket in **Needs Answers** (at Drata this resolves to **Blocked**; teams with neither keep their state, and the question comment alone marks the ticket as parked).
 - You do **not** merge, force-push or set **Done**. Merge handling happens only when the user later says a PR was merged (see *On merge*).
 - Be simple, surgical and goal-driven (minimum change, no scope creep, verification-led).
 
@@ -34,7 +34,8 @@ Post one status line as each ticket moves stage (planned → executing → PR op
 
 For each ticket, spawn `wf-linear` `FETCH <id>` **and** `READ_SPEC <id>` in one message.
 - **Resolve the spec.** `SPEC` = the `READ_SPEC` body when `SPEC_STATUS: FOUND` (written by the optional `/wf-spec`). Otherwise use the `FETCH` description. A ticket with no acceptance criteria is fine: the planner drafts the definition of done.
-- **Resume a parked ticket.** If the state is *Needs Answers*, spawn `wf-linear` `READ_ANSWERS <id>`:
+- **Skip finished tickets.** If `STATE_TYPE` is `completed`, `canceled` or `duplicate` (e.g. Merged), report `already <STATE>` and drop the ticket from this run.
+- **Resume a parked ticket.** Detect it by its comments, not its state (most teams have no *Needs Answers* state). If `FETCH`'s `COMMENTS` include one whose first line starts with `🤖 Spec questions`, spawn `wf-linear` `READ_ANSWERS <id>`:
   - `AWAITING` → report `still awaiting answers` and drop the ticket from this run.
   - `ANSWERED` → build an `ANSWERS:` section. Map the reply onto the posted questions: `all recommended` means every ✅ option, `1: B` means question 1 option B, matching text means that option, and other free text passes through verbatim. An unanswered question takes its ✅ option. Note each default in the final report.
   - `NO_PENDING` → continue as a fresh ticket.
@@ -76,7 +77,7 @@ For each ticket, spawn `wf-github` `PR_HISTORY <keywords/paths from the ticket>`
 
      _Reply like:_ `1: B, 2: A` _— or_ `all recommended`. Then re-run `/wf <identifier>`.
      ```
-  2. Spawn `wf-linear` `POST_COMMENT <id>` with it, then `SET_STATUS <id> "Needs Answers"`.
+  2. Spawn `wf-linear` `POST_COMMENT <id>` with it, then `SET_STATUS <id> "Needs Answers"` (resolves to Blocked where there is no Needs Answers state). If that returns `ERROR: no workflow state matches`, leave the state as it is: the comment is what marks the ticket as parked.
   3. Report `parked — questions on Linear`. The worktree stays and is reused on the next run.
 
 ## 4. Overlap guard
@@ -109,7 +110,7 @@ For each parallel-set ticket, spawn `wf-runner` with its `GOAL`, `DEFINITION_OF_
 Local checks are scoped to changed files. CI is the full check, so it is the finish line. For every PR opened ready in step 6, loop:
 
 1. Spawn `wf-github` `CHECKS <pr>` (one spawn per PR, all in one message). It watches for up to about 9 minutes and returns `PASS`, `NONE`, `PENDING`, or `FAIL` with each failing check and a log excerpt.
-2. **`PASS` / `NONE`** → spawn `wf-linear` `SET_STATUS <id> "In Review"`. Done.
+2. **`PASS` / `NONE`** → spawn `wf-linear` `SET_STATUS <id> "In Review"` (Code Review on teams without In Review). Done. Linear's GitHub integration may already have moved the ticket when the PR opened; the call is idempotent.
 3. **`PENDING`** → call `CHECKS` again, up to 6 calls (about 1 hour). If it is still pending, set In Review anyway and note `CI still running` in the report.
 4. **`FAIL`** → spawn `wf-executor` in that worktree with the failing checks and log excerpts as the fix list, plus the `CONTEXT_PACK`. Tell it: fix the failures this diff caused, verify narrowly, commit. If a failure isn't caused by this diff (flaky, infra, already failing on base), return `BLOCKED: unrelated — <evidence>` instead of changing code.
    - Executor committed → `wf-github` `PUSH`, then go back to 1.
@@ -169,13 +170,13 @@ This often runs in a later session. Resolve everything from the identifier, not 
 For each merged `<identifier>`:
 1. Branch = `git branch --list "<identifier>/*"` (the one match). Worktree = the `git worktree list` entry on that branch. If neither exists, it was already cleaned up; do steps 2–3 and report.
 2. Spawn `wf-github` `PR_STATUS <identifier-or-branch>`. If `STATE` is not `MERGED`, stop and tell the user. Change nothing.
-3. Spawn `wf-linear` `SET_STATUS <identifier> "QA"`. Merged means the code is in, not that it is verified: a human verifies and moves it to Done. If the team has no QA-like state (`ERROR: no workflow state matches`), leave the ticket where it is and say so. That never blocks cleanup.
+3. Spawn `wf-linear` `SET_STATUS <identifier> "QA"`. At Drata, Linear's GitHub integration has usually moved the ticket to **Merged** already; `wf-linear` then leaves it unchanged, which is correct. On a team with a real QA state and no automation, the ticket moves to QA for a human to verify. Either way the workflow never sets Done, and the Linear result never blocks cleanup.
 4. Clean up from `ROOT`:
    - `git worktree remove "<worktree>"`. If it reports uncommitted changes, stop and tell the user; use `--force` only if they say so.
    - `git branch -d "<branch>"`. Use `-D` only if git refuses and the user confirms.
    - `git worktree prune`.
    - `rm -rf "ROOT/.worktrees/.handoffs/<identifier>"`.
-5. Confirm: `<identifier> → QA (awaiting human verification), worktree + branch removed`.
+5. Confirm: `<identifier> → <state wf-linear reported>, worktree + branch removed`.
 
 Never clean up a worktree whose PR has not been confirmed merged.
 

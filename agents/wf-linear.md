@@ -22,19 +22,25 @@ model: haiku
 
 ## Status name mapping
 
-Match the canonical stage to the team's actual state by name. Common synonyms:
+Match the canonical stage to the team's actual state by name. Try each column left to right and stop at the first state the team has:
 
-| Canonical stage | Matches state named (any of) |
-|---|---|
-| To Do | "To Do", "Todo", "Backlog", "Unstarted" |
-| Needs Answers | "Needs Answers", "Awaiting Answers", "Awaiting Input", "Needs Input", "Questions" |
-| Ready for Development | "Ready for Development", "Ready for Dev", "Ready", "Planned", "Spec'd" |
-| In Progress | "In Progress", "Started", "Doing" |
-| In Review | "In Review", "Review", "Code Review" |
-| QA | "QA", "Ready for QA", "In QA", "Testing", "Verifying" |
-| Done | "Done", "Completed", "Merged", "Closed" |
+| Canonical stage | Matches state named (any of) | Fallback if none match |
+|---|---|---|
+| To Do | "To Do", "Todo", "Backlog", "Unstarted" | — |
+| Needs Answers | "Needs Answers", "Awaiting Answers", "Awaiting Input", "Needs Input", "Questions" | "Blocked" |
+| Ready for Development | "Ready for Development", "Ready for Dev", "Ready", "Planned", "Spec'd" | "Todo" |
+| In Progress | "In Progress", "Started", "Doing" | — |
+| In Review | "In Review", "Code Review", "Review" | — |
+| QA | "QA", "Ready for QA", "In QA" | — (leave the issue where it is) |
+| Done | "Done", "Completed", "Merged", "Deployed", "Closed" | — |
 
-Prefer an exact case-insensitive name match; fall back to the synonym list. If multiple states match, prefer the one whose `type` aligns (`unstarted`, `started`, `started`/review, `completed`). If none match, return `ERROR: no workflow state matches '<stage>' for team <team>` and list the available state names.
+Prefer an exact case-insensitive name match; then the synonyms; then the fallback. If multiple states match, prefer the one whose `type` aligns (`unstarted`, `started`, `completed`). If none match, return `ERROR: no workflow state matches '<stage>' for team <team>` and list the available state names.
+
+QA deliberately does **not** match "Testing" or "Ready for Testing": on teams that have them they sit *before* merge, so mapping a merged ticket there would move it backwards.
+
+### Drata's workflows (observed 2026-11)
+
+Every engineering team has: Triage (`triage`), Backlog (`backlog`), Todo (`unstarted`), In Progress (`started`), In Review (`started`), Done (`completed`), Canceled (`canceled`), Duplicate (`duplicate`). Almost all also have **Merged** (`completed`), which Linear's GitHub integration sets automatically when the linked PR merges. Some teams add Blocked, Ready for Development, Code Review, Testing / Ready for Testing, Product Review, Ready for Deployment, Deployed, Closed, or POC Ready. Infrastructure uses Code Review instead of In Review. No team has a "Needs Answers" or "QA" state, so those resolve through the fallback column (Needs Answers → Blocked) or leave the issue unchanged (QA).
 
 ## Supported intents
 
@@ -46,6 +52,7 @@ Return:
 IDENTIFIER: ENG-123
 TITLE: <title>
 STATE: <current state name>
+STATE_TYPE: <Linear's type for that state: triage | backlog | unstarted | started | completed | canceled | duplicate>
 TEAM: <team key>
 URL: <issue url>
 BRANCH_SLUG: <kebab-case of title, lowercased, alphanumerics + dashes, max 50 chars, no leading TEAM-NUM>
@@ -88,6 +95,15 @@ IDENTIFIER: ENG-123
 STATE: In Progress   (was: To Do)
 ```
 **Guard — never auto-complete.** Refuse to transition into a `completed`-type state (Done/Closed/Merged/…): the workflow hands finished work to a human, it never marks it Done itself. If `<stage>` resolves *only* to a completed-type state, transition nothing and return `ERROR: refusing to set completed-type state '<name>' — the workflow never sets Done`.
+
+**Guard — never move a finished issue backwards.** If the issue is currently in a `completed`, `canceled`, or `duplicate`-type state (e.g. Merged, set by the GitHub integration), transition nothing and return:
+```
+IDENTIFIER: ENG-123
+STATE: Merged   (unchanged — already completed)
+```
+This is a normal result, not an error.
+
+**No match for QA.** If `<stage>` is QA and the team has no QA state, transition nothing and return `STATE: <current>   (unchanged — team has no QA state)`. Also a normal result.
 
 ### UPDATE_DESCRIPTION `<identifier>`
 You will be given the full new description markdown. Replace the issue description with it. Return:
@@ -134,7 +150,7 @@ SPEC:
 ```
 
 ### LIST_BY_STATUS `<stage>`
-List issues currently in the named state across the viewer's accessible teams (match the state name via the mapping table, same as SET_STATUS). Return the identifiers so the orchestrator can sweep them:
+List issues currently in the named state across the viewer's accessible teams (match the state name per team via the mapping table, fallback included, same as SET_STATUS). **Only issues assigned to or created by the viewer** (`me`): a fallback like Needs Answers → Blocked would otherwise sweep in every team's unrelated blocked work. Return the identifiers so the orchestrator can sweep them:
 ```
 STAGE: Needs Answers
 ISSUES:

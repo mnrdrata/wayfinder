@@ -12,7 +12,7 @@ You are the orchestrator. Do not write specs or touch Linear yourself — delega
 
 ## Up front (once)
 
-`READY_STATE = "Ready for Development"` (`wf-linear` resolves it to the team's state by synonym). There is no generated repo manual: `wf-spec-builder` reads the repo's own `CLAUDE.md`/`AGENTS.md` itself.
+`READY_STATE = "Ready for Development"` (`wf-linear` resolves it to the team's state by synonym, falling back to Todo on teams without it — most Drata teams). "Needs Answers" likewise resolves to Blocked at Drata. There is no generated repo manual: `wf-spec-builder` reads the repo's own `CLAUDE.md`/`AGENTS.md` itself.
 
 ## Entry routing (parse `$ARGUMENTS`)
 
@@ -27,7 +27,7 @@ Resolve two things before processing tickets: the **question mode** and the **ti
 
 **Ticket ids** = the remaining tokens after removing any `--inline`/`--linear` flag.
 - **Ids given** → process exactly those.
-- **No ids** → **sweep mode** (only meaningful under `MODE=linear`): spawn `wf-linear` with intent `LIST_BY_STATUS "Needs Answers"` and process every returned identifier (tickets already parked awaiting answers). If it returns `none`, tell the user nothing is awaiting answers and stop. Under `MODE=inline` there's nothing to resume — tell the user to pass ticket ids and stop.
+- **No ids** → **sweep mode** (only meaningful under `MODE=linear`): spawn `wf-linear` with intent `LIST_BY_STATUS "Needs Answers"` (your own tickets only; Blocked at Drata) and process every returned identifier. Tickets can be in that state for reasons unrelated to spec questions, so in sweep mode a ticket whose `READ_ANSWERS` returns `NO_PENDING` is **skipped**, never spec'd. If it returns `none`, tell the user nothing is awaiting answers and stop. Under `MODE=inline` there's nothing to resume — tell the user to pass ticket ids and stop.
 
 ## Processing order
 
@@ -39,7 +39,7 @@ Resolve two things before processing tickets: the **question mode** and the **ti
 
 ## Per ticket
 
-1. **Fetch.** Spawn `wf-linear` with intent: `FETCH <identifier>`. Capture the returned identifier, title, current state, description, comments, and the `ATTACHMENTS` list. **If the current state is *Needs Answers*, this ticket is a resume** — it was parked earlier with questions posted to Linear. Remember this; step 4 branches on it.
+1. **Fetch.** Spawn `wf-linear` with intent: `FETCH <identifier>`. Capture the returned identifier, title, current state, description, comments, and the `ATTACHMENTS` list. **If its comments include one whose first line starts with `🤖 Spec questions`, this ticket is a resume** — it was parked earlier with questions posted to Linear. Detect this from the comments, not the state: most teams have no *Needs Answers* state (at Drata parked tickets sit in Blocked, or keep their state). Remember this; step 4 branches on it.
 
 2. **Ingest design handoffs (if any).** If `ATTACHMENTS` is not `none`, download each **promptly** — the signed hrefs expire ~5 min after the fetch. For each entry, run `~/.claude/bin/wf-fetch-handoff <handoff-dir> "<href>" <size-bytes>` where `<handoff-dir>` is a fresh scratch dir for this ticket (e.g. `$(mktemp -d)/<identifier>-handoff`). The helper validates the host/size, unpacks zips safely, and prints the unpacked path. Collect the printed paths as `HANDOFF` (a dir, or list of dirs/files). If the helper fails (expired link, etc.), note it and continue with `HANDOFF=none` — ingestion is best-effort and never blocks specing.
 
@@ -50,9 +50,9 @@ Resolve two things before processing tickets: the **question mode** and the **ti
 
 4. **Refine.** Spawn `wf-spec-builder`, passing the full fetched ticket content, the `PR_HISTORY` digest, the `RELATED_TICKETS` digest, the `RELATED_DECISIONS` digest, **and** `HANDOFF` (the local path(s), or `none`) — plus, on a resume, an `ANSWERS:` section (see below). It explores the codebase and reads any handoff as **reference-only** visual/behavioral source of truth. **It cannot reach the user** (`AskUserQuestion` doesn't surface inside a subagent), so it returns `STATUS: NEEDS_INPUT` (question blocks: `header` / `question` / `multiSelect` / `options`, recommended option marked), `STATUS: SPEC` (finished implementation spec markdown), or — for a research/spike ticket — `STATUS: DECISION` (the full new description with a `## Decision` section appended). The builder is **mode-agnostic** on questions — it always just returns them; `MODE` only decides what *you* do with them.
 
-   **Resume entry — if step 1 flagged this ticket as *Needs Answers*:** before spawning the builder, spawn `wf-linear` with intent `READ_ANSWERS <identifier>`.
+   **Resume entry — if step 1 flagged this ticket as a resume:** before spawning the builder, spawn `wf-linear` with intent `READ_ANSWERS <identifier>`.
    - `QUESTIONS_STATUS: AWAITING` → the teammate hasn't replied yet. Report "still awaiting answers" and leave it parked — don't spawn the builder. (In linear-parallel mode this ticket's task is simply done.)
-   - `QUESTIONS_STATUS: NO_PENDING` → no question comment found; treat as a fresh spawn (no `ANSWERS`).
+   - `QUESTIONS_STATUS: NO_PENDING` → no question comment found; in sweep mode skip the ticket (it is blocked for some other reason), otherwise treat as a fresh spawn (no `ANSWERS`).
    - `QUESTIONS_STATUS: ANSWERED` → build the `ANSWERS:` section from the reply. The `QUESTIONS` body it returns is the exact comment you posted (numbered questions, lettered options, ✅ on the recommended). Map the teammate's free-text reply onto it: `all recommended` → every ✅ option; `1: B` → question 1's option B label; option text or clear paraphrase → that option; genuine free-text that matches no option → pass it verbatim (an "Other" answer). If a question is left unanswered or is truly ambiguous, fall back to its recommended option **and note it in the run summary** so you can flag it to the user. Emit `ANSWERS:` as one line per question: `Qn (<question text>): <chosen option label(s) verbatim>[ — <free-text>]`. Then spawn the builder with the base inputs **plus** this `ANSWERS:` section.
 
    **Handling the builder's return (both fresh and resume):**
@@ -80,7 +80,7 @@ Resolve two things before processing tickets: the **question mode** and the **ti
           ```
           Number questions in the builder's order; letter the options in the builder's order; put `✅ recommended` on the option the builder tagged `(recommended)`.
        2. Spawn `wf-linear` `POST_COMMENT <identifier>` with that markdown.
-       3. Spawn `wf-linear` `SET_STATUS <identifier> "Needs Answers"`.
+       3. Spawn `wf-linear` `SET_STATUS <identifier> "Needs Answers"` (Blocked at Drata). If it returns `ERROR: no workflow state matches`, leave the state: the question comment alone marks the ticket as parked.
        4. Park this ticket: report `awaiting answers` (under linear-parallel it's just one finished task in the fan-out). The teammate answers in Linear; a later `/wf-spec` run (with this id, or no ids to sweep) resumes it via the READ_ANSWERS path above.
 
 5. **Persist.** Write the finished output back to the ticket. **`MODE=inline`** gates the write behind one AskUserQuestion (you're at the terminal); **`MODE=linear`** persists **directly with no confirmation** — the async/no-terminal mode never prompts you; the teammate reviews the written spec/decision in Linear. Two flavors:
@@ -98,7 +98,7 @@ Resolve two things before processing tickets: the **question mode** and the **ti
    - **`MODE=inline`** → confirm "Record this decision on <identifier>?" (Yes / Edit / Skip) first. **Yes** → run the persist action, then tell the user the spike is decided and that they close it (Done) in Linear when satisfied. **Edit** → relay the user's tweaks back to `wf-spec-builder` and re-confirm. **Skip** → leave the ticket unchanged; note it.
    - **`MODE=linear`** → run the persist action directly.
 
-6. Status moves to **Ready for Development** only when the **spec comment** was posted (step 5 spec → Yes, call (1) succeeded) — this also lifts a resumed ticket out of *Needs Answers*. A **decision** written for a research/spike ticket does **not** transition status (the workflow never auto-completes; the human closes the spike). Tickets **parked** for answers sit in *Needs Answers*; tickets that were skipped — or edited but not yet written — keep their current status; don't transition them.
+6. Status moves to **Ready for Development** (Todo on teams without it) only when the **spec comment** was posted (step 5 spec → Yes, call (1) succeeded) — this also lifts a resumed ticket out of *Needs Answers*/Blocked. A **decision** written for a research/spike ticket does **not** transition status (the workflow never auto-completes; the human closes the spike). Tickets **parked** for answers sit in *Needs Answers*; tickets that were skipped — or edited but not yet written — keep their current status; don't transition them.
 
 ## After all tickets
 

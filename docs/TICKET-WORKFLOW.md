@@ -12,7 +12,7 @@ Then the workflow opens the PR and fixes CI until it is green.
 ```
 /wf ENG-12 ENG-13 ENG-14   # hands-off: each ticket → PR with green CI, In Review
                            # …you review & merge the PRs yourself…
-"ENG-12 is merged"         # only now does the workflow move it to QA + clean up
+"ENG-12 is merged"         # only now does the workflow clean up (Linear marks it Merged)
 ```
 
 Two optional extras:
@@ -28,7 +28,7 @@ Run `/wf-eval` whenever you change an agent prompt, a model tier, or the flow. I
 
 A run never stops to ask you anything. When a ticket leaves a decision open, the planner picks the safe, conventional option and records it. Every decision shows up in the PR body and in a comment on the ticket, so a reviewer can overrule it.
 
-The only exception is a ticket with no workable goal at all. Its questions go to Linear as a comment and the ticket is parked in *Needs Answers*. The rest of the batch keeps going. Re-running `/wf <id>` reads the answers and continues.
+The only exception is a ticket with no workable goal at all. Its questions go to Linear as a comment and the ticket is parked (in *Blocked* at Drata). The rest of the batch keeps going. Re-running `/wf <id>` reads the answers and continues.
 
 ### Context comes from the repo itself
 
@@ -95,7 +95,21 @@ Every ticket in a run ends in exactly one of three states.
 
 **Needs a human.** The PR is a draft (or there is no PR), with the reasons written on it and on the ticket. The ticket stays *In Progress* and the worktree is kept. Re-running `/wf <id>` resumes.
 
-**Parked.** Questions are on the ticket, and the ticket is in *Needs Answers*.
+**Parked.** Questions are on the ticket, and the ticket is in *Blocked* (or keeps its state on teams without one). The `🤖 Spec questions` comment, not the state, is what marks it as parked.
+
+## Linear states at Drata
+
+`wf-linear` matches each team's real states by name, then synonyms, then a per-stage fallback. Every Drata engineering team has Triage, Backlog, Todo, In Progress, In Review, Done, Canceled and Duplicate; almost all have Merged, which Linear's GitHub integration sets when the PR merges. No team has a Needs Answers or QA state.
+
+| Workflow step | Drata state |
+|---|---|
+| Work starts (after planning) | In Progress |
+| PR open, CI green | In Review (Code Review on Infrastructure) |
+| Ticket parked with questions | Blocked, if the team has it |
+| Spec agreed (`/wf-spec`) | Ready for Development where it exists, else Todo |
+| PR merged | Merged, set by the GitHub integration |
+
+Two guards keep this safe. `wf-linear` never sets a completed-type state, and it never moves a completed, canceled or duplicate ticket backwards. The QA stage does not match Testing or Ready for Testing, which sit before merge on the teams that have them.
 
 ## Operational guarantees
 
@@ -111,7 +125,7 @@ Every ticket in a run ends in exactly one of three states.
 Only when you say "ENG-123 is merged":
 
 1. `wf-github` confirms the PR is merged.
-2. `wf-linear` moves the ticket to QA (or leaves it if the team has no QA state).
+2. `wf-linear` leaves the ticket in Merged (set by the GitHub integration). It moves to QA only on a team that has a QA state and no automation.
 3. The worktree and branch are removed.
 
 A human verifies the result and moves it to Done. The workflow never sets Done.

@@ -12,7 +12,7 @@ A run never stops to ask you questions, and it **never merges or marks a ticket 
 ```
 /wf ENG-12 ENG-13 ENG-14  # hands-off: each ticket → PR with green CI (In Review)
                           # …you review & merge the PRs yourself…
-"ENG-12 is merged"        # only now does the workflow move it to QA + clean up
+"ENG-12 is merged"        # only now does the workflow clean up (Linear marks it Merged)
 ```
 
 There is no per-repo setup. `/wf` reads the repo's own `CLAUDE.md`/`AGENTS.md`.
@@ -89,16 +89,21 @@ Then, in Claude Code: connect Linear (`/mcp`) and run `/wf <TICKET-ID>` from a r
 
 ## Linear workflow states
 
-The workflow moves tickets through **In Progress → In Review → QA (after merge)**.
-It uses **Needs Answers** for parked tickets and **Ready for Development** for spec'd ones.
-Your team's state names can differ. `wf-linear` lists your team's real states and
-matches by exact name, then a synonym table, then Linear's state `type`. Common
-variants (`Doing`, `Backlog`, `Code Review`, …) just work.
+`wf-linear` lists each team's real states and matches by exact name, then a synonym
+table, then a per-stage fallback. At Drata the stages resolve like this:
 
-**No QA state?** The workflow leaves the ticket In Review after merge and still cleans up.
+| Workflow step | Drata state |
+|---|---|
+| Work starts (after planning) | In Progress |
+| PR open, CI green | In Review (Code Review on Infrastructure) |
+| Ticket parked with questions | Blocked; teams without it keep their state |
+| Spec agreed (`/wf-spec`) | Ready for Development where it exists, else Todo |
+| PR merged | Merged, set by Linear's GitHub integration. The workflow leaves it there. |
 
-**Done is never automatic.** Whatever you configure, the workflow refuses to set a
-`completed`/Done-type state on its own — a human always closes the loop.
+**Done is never automatic.** The workflow refuses to set any completed-type state
+(Done, Merged, Deployed, Closed). It never moves a completed, canceled or duplicate
+ticket backwards. It detects parked tickets by their `🤖 Spec questions` comment,
+not by their state.
 
 ## Developing / testing changes
 
