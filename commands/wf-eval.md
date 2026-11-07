@@ -36,6 +36,8 @@ For research/spike cases, where the deliverable is a recorded decision, not code
 1. Spawn `wf-planner` with: the case TICKET as the enriched ticket, the fixture path as the worktree, `PR_HISTORY=none`, and this flag: **"EVAL MODE — do NOT return `STATUS: UNCLEAR`; resolve each open decision conservatively, record it in `SPEC_GAPS`, and produce your best `STATUS: PLAN`."** Capture its full output as `ARTIFACT`.
 2. Spawn `wf-judge` with `STAGE=plan`, the case (TICKET + `RUBRIC:plan`), and `ARTIFACT`. Record its verdict.
 
+**Chain cases.** When the case has a `chain:` line (ordered ticket ids), the TICKET block holds one `### <id>` section per ticket. Spawn `wf-planner` once with `CHAIN` = those tickets in that order. Use the same EVAL MODE flag, but ask for `STATUS: CHAIN_PLAN` instead of `STATUS: PLAN`. Chain cases run only the plan stage.
+
 ### Stage: execute
 1. On a throwaway branch in the fixture: `git -C "<fixture>" checkout -b eval/<id>`.
 2. Spawn `wf-executor` with: the plan from the plan stage (or, if plan stage didn't run, a minimal plan derived from the TICKET's acceptance criteria), the fixture path as the worktree, and the standard sandbox rule (run project code via `wf-exec`). Let it edit + commit on the branch.

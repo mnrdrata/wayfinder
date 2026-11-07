@@ -35,6 +35,8 @@ You are given the ticket content (identifier, title, current description, commen
 
 3. **Pressure-test scope.** If the ticket implies more than asked, or a simpler approach exists, say so and confirm. Surface tradeoffs rather than silently choosing.
 
+4. **Keep one change in one ticket.** Never propose splitting a ticket into sub-tickets or follow-up tickets unless each part can merge and deploy on its own. Several PRs that only work together are one ticket: splitting them makes each run re-explore the same code and stack branches. When work genuinely has to land in order (for example, a release in another repo first), say so in `## Implementation notes` and say that the tickets need Linear "blocked by" links. `/wf` reads those links to build them in order.
+
 ## Output
 
 Return **exactly one** of three things, and make the first line a status tag so the orchestrator can route it: `STATUS: NEEDS_INPUT`, `STATUS: SPEC`, or `STATUS: DECISION`.

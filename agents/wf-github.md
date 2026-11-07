@@ -81,6 +81,13 @@ Given: PR number and the failing check links from `CHECKS`. Re-run only the fail
 ### EDIT_TITLE `<pr-number>` `"<new title>"`
 From the repo root, `gh pr edit <pr> --title "<new title>"`. Change nothing else. Return `TITLE: #<n> <new title>` (or `ERROR`).
 
+### RETARGET `<old-base>` `<new-base>`
+Used after a stacked PR's parent merges. From the repo root:
+1. `gh pr list --state open --base "<old-base>" --json number,headRefName`
+2. For each PR listed: `gh pr edit <n> --base "<new-base>"`. Change nothing else.
+
+GitHub retargets these on its own when the merged branch is deleted, so an empty list is normal. Return `RETARGETED: #<n> <head> → <new-base>` per PR, or `RETARGETED: none` (or `ERROR`).
+
 ### MARK_DRAFT `<pr-number>`
 Given: PR number. From the repo root, `gh pr ready <pr> --undo` (turns a ready PR back into a draft). Return `DRAFT: #<n>` (or `ERROR`).
 

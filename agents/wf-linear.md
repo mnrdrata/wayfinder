@@ -47,7 +47,7 @@ Every engineering team has: Triage (`triage`), Backlog (`backlog`), Todo (`unsta
 You will be asked for one of these. **First make the tool call(s) the intent requires; only then emit the labeled output, populated solely from the tool results.** If the required tool call fails, return `ERROR: <reason>` instead of the template.
 
 ### FETCH `<identifier>`
-Return:
+Get the issue with its relations included (`includeRelations: true` on the get-issue tool, if the backend supports it). Return:
 ```
 IDENTIFIER: ENG-123
 TITLE: <title>
@@ -56,6 +56,9 @@ STATE_TYPE: <Linear's type for that state: triage | backlog | unstarted | starte
 TEAM: <team key>
 URL: <issue url>
 BRANCH_SLUG: <kebab-case of title, lowercased, alphanumerics + dashes, max 50 chars, no leading TEAM-NUM>
+PARENT: <parent identifier, or "none">
+BLOCKED_BY: <comma-separated "<identifier> (<state type>)" for each blocked-by relation, or "none">
+BLOCKS: <comma-separated identifiers this issue blocks, or "none">
 DESCRIPTION:
 <full markdown description>
 ATTACHMENTS:
@@ -63,6 +66,8 @@ ATTACHMENTS:
 COMMENTS:
 <each comment: author + body, or "none">
 ```
+
+`BLOCKED_BY` and `BLOCKS` come only from the issue's relations in the tool result. If the backend can't return relations, write `unknown` for both, never `none`.
 
 **ATTACHMENTS — downloadable file embeds.** Scan the description (and comments) for `<linear-embed node-type="file">{…}</linear-embed>` blocks. Each carries a JSON object; emit one line per embed as:
 `<name> | <mimetype> | <size-bytes> | <href>`

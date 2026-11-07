@@ -118,7 +118,8 @@ Two guards keep this safe. `wf-linear` never sets a completed-type state, and it
 - **Resumable.** An existing worktree for the ticket is reused, never recreated or deleted.
 - **Bounded loops.** At most 2 review/verify fix rounds and 3 CI fix rounds per ticket. An unrelated CI failure gets one rerun, not code changes.
 - **Empty-PR guard.** A branch with no commits beyond base never gets a PR.
-- **No stacking.** Each ticket branches from base, so a ticket can't build on another's unmerged work.
+- **Stacking only for linked tickets.** Tickets linked with Linear "blocked by" and run in the same `/wf` form a chain. One planner plans the whole chain. The tickets build in order as stacked PRs, each branching from the one before it. Every other ticket branches from base.
+- **Upstream blockers are drafts.** When a change needs an unreleased package or a change in another repo, its PR opens as a draft that names what it waits on.
 
 ## On merge
 
