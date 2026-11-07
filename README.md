@@ -80,12 +80,20 @@ cd wayfinder
 ```
 
 The installer copies the `wf-*` files into `~/.claude/`, generates the sandbox
-profile for your machine, and sets up the eval fixtures. It **does not modify your
-`settings.json`**. Instead it prints one manual step: merge the hook entries and the
-`gh` permission rules from [`settings.hooks.json`](settings.hooks.json) into your
-`~/.claude/settings.json`. The hooks enforce the sandbox and the boundary guard. The
-permission rules let `wf-github` run `gh` without prompts, so a hands-off run doesn't
-stall. The installer warns until both are in place.
+profile for your machine, and sets up the eval fixtures.
+
+Then it checks `~/.claude/settings.json` for the hook entries and `gh` permission
+rules in [`settings.hooks.json`](settings.hooks.json). The hooks enforce the sandbox
+and the boundary guard. The permission rules let `wf-github` run `gh` without prompts,
+so a hands-off run doesn't stall.
+
+If anything is missing, the installer lists it and asks before adding it. It only
+adds entries: your existing settings stay as they are, and it saves a timestamped
+backup first.
+
+To edit the file yourself, answer no or run `./install.sh --no-settings`. The
+installer then prints the manual steps, and repeats the check on every run until
+nothing is missing.
 
 Then, in Claude Code: connect Linear (`/mcp`) and run `/wf <TICKET-ID>` from a repo.
 

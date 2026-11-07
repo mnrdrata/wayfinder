@@ -3,13 +3,22 @@
 #
 # Copies the wf-* agents, commands, bin scripts, and hooks into your Claude Code
 # config dir, generates the sandbox profile for your machine, and sets up the eval
-# fixtures. It does NOT touch your settings.json — hook wiring stays a manual step
-# (so it can never clobber your existing config), but the installer now DETECTS
-# whether the two guard hooks are wired and warns loudly until they are.
+# fixtures. Then it checks your settings.json for the guard hooks and gh allow rules
+# from settings.hooks.json. If any are missing, it lists them and asks before adding
+# them: it only appends, and backs up settings.json first. Answer no, pass
+# --no-settings, or run without a terminal, and it prints the manual steps instead.
 #
 # Re-runnable: it overwrites only wf-* files it owns and leaves everything else alone.
-# Usage: ./install.sh
+# Usage: ./install.sh [--no-settings]
 set -euo pipefail
+
+NO_SETTINGS=false
+for arg in "$@"; do
+  case "$arg" in
+    --no-settings) NO_SETTINGS=true ;;
+    *) echo "unknown option: $arg (usage: ./install.sh [--no-settings])" >&2; exit 2 ;;
+  esac
+done
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE="${CLAUDE_HOME:-$HOME/.claude}"
@@ -66,47 +75,102 @@ bash "$CLAUDE/ticket-workflow-evals/setup-fixtures.sh"
 say "Files installed."
 echo
 
-# --- hook wiring check (detect-and-warn; never touches settings.json) ----------
+# --- settings.json: guard hooks + gh allow rules (offer to add what's missing) ---
 # The guards are the workflow's enforcement layer: the PreToolUse hook blocks
 # unsandboxed project commands in worktrees, the SubagentStop hook blocks
 # boundary agents that answer without making a tool call. The workflow RUNS
 # without them (agents follow their prompts voluntarily), so a skipped wiring
-# step fails silently — this check makes that state loud on every install run.
+# step fails silently. Without the gh allow rules, wf-github's gh calls prompt (or
+# are denied in auto mode) and a hands-off /wf run stalls with no PR.
+#
+# So on every run: compare settings.json against settings.hooks.json, list what's
+# missing, and offer to add it. The merge only appends (never removes or reorders),
+# backs up settings.json first, and writes in place so a symlinked file stays a link.
 SETTINGS="$CLAUDE/settings.json"
-hooks_wired=false
-if command -v jq >/dev/null 2>&1 && [ -f "$SETTINGS" ] && jq -e . "$SETTINGS" >/dev/null 2>&1; then
-  if jq -e '.hooks.PreToolUse[]?.hooks[]?.command | select(contains("wf-sandbox-guard.sh"))' "$SETTINGS" >/dev/null 2>&1 \
-  && jq -e '.hooks.SubagentStop[]?.hooks[]?.command | select(contains("wf-boundary-toolcall-guard.sh"))' "$SETTINGS" >/dev/null 2>&1; then
-    hooks_wired=true
+SNIPPET="$REPO/settings.hooks.json"
+
+# A hook counts as present when an existing command in the same event names the same
+# script file, so a user's own path spelling (~ vs $HOME) still matches.
+JQ_DEFS='$s[0] as $src
+| def present($ev; $entry):
+    ([$ev[]?.hooks[]?.command]) as $have
+    | all($entry.hooks[].command | split("/") | last; . as $n | any($have[]; contains($n)));
+  def missing_rules: ($src.permissions.allow - (.permissions.allow // []));
+  def missing_hooks: . as $cur
+    | [ $src.hooks | to_entries[] | .key as $k | .value[]
+        | select(present($cur.hooks[$k]; .) | not) | {event: $k, entry: .} ];
+  def merged: missing_rules as $r | missing_hooks as $h
+    | .permissions.allow = ((.permissions.allow // []) + $r)
+    | reduce $h[] as $m (.; .hooks[$m.event] = ((.hooks[$m.event] // []) + [$m.entry]));
+'
+
+manual_steps() {
+  cat <<EOF
+  To add them yourself:
+    1. Open $SETTINGS.
+    2. Add each missing rule to the "permissions.allow" list. Keep your existing rules.
+    3. Add each missing hook entry from $SNIPPET
+       to the matching array under "hooks". Keep your existing entries.
+    4. Run ./install.sh again. This check repeats until nothing is missing.
+EOF
+}
+
+current='{}'
+settings_problem=""
+if ! command -v jq >/dev/null 2>&1; then
+  settings_problem="jq is not installed, so the installer can't read $SETTINGS."
+elif [ -f "$SETTINGS" ]; then
+  if jq -e 'type == "object"' "$SETTINGS" >/dev/null 2>&1; then
+    current="$(cat "$SETTINGS")"
+  else
+    settings_problem="$SETTINGS is not a valid JSON object, so the installer won't edit it."
   fi
 fi
 
-if [ "$hooks_wired" = true ]; then
-  say "Guard hooks: wired in $SETTINGS — sandbox + boundary enforcement active."
+if [ -n "$settings_problem" ]; then
+  err "Can't check the guard hooks and gh allow rules: $settings_problem"
+  echo "  Add the \"hooks\" entries and \"permissions.allow\" rules from $SNIPPET"
+  echo "  to $SETTINGS by hand. Keep your existing entries."
 else
-  err "GUARD HOOKS NOT WIRED — the workflow's security model is NOT enforced."
-  err "Nothing currently blocks unsandboxed project commands in worktrees, or a"
-  err "boundary agent fabricating an answer without a real API call. Fix it now:"
-  cat <<EOF
-  Merge the two entries in:
-      $REPO/settings.hooks.json
-  into the "hooks" object of:
-      $SETTINGS
-  (If you have no "hooks" key yet, you can paste the whole "hooks": { ... } block.)
-  Then re-run ./install.sh — this warning repeats until both hooks are detected.
-EOF
-fi
+  sq() { printf '%s' "$current" | jq --slurpfile s "$SNIPPET" "$JQ_DEFS $1" "${@:2}"; }
+  missing_rules="$(sq 'missing_rules[] | tojson' -r)"
+  missing_hooks="$(sq 'missing_hooks[] | "\(.event): \(.entry.hooks[].command | split("/") | last)"' -r)"
 
-# --- gh permission check (detect-and-warn) --------------------------------------
-# Without allow rules, wf-github's gh calls prompt (or are denied in auto mode) and a
-# hands-off /wf run stalls with partial PR history or no PR at all.
-if command -v jq >/dev/null 2>&1 && [ -f "$SETTINGS" ] \
-   && jq -e '.permissions.allow[]? | select(startswith("Bash(gh pr create"))' "$SETTINGS" >/dev/null 2>&1 \
-   && jq -e '.permissions.allow[]? | select(startswith("Bash(~/.claude/bin/wf-ci-checks"))' "$SETTINGS" >/dev/null 2>&1; then
-  say "gh permissions: allow rules present."
-else
-  warn "gh allow rules not found — /wf will stop on gh permission prompts."
-  warn "Add the \"permissions.allow\" rules from $REPO/settings.hooks.json to $SETTINGS."
+  if [ -z "$missing_rules" ] && [ -z "$missing_hooks" ]; then
+    say "Settings: guard hooks and gh allow rules all present in $SETTINGS."
+  else
+    if [ -n "$missing_hooks" ]; then
+      err "GUARD HOOKS NOT WIRED: the workflow's security model is NOT enforced."
+      err "Nothing blocks unsandboxed project commands in worktrees, or a boundary"
+      err "agent fabricating an answer without a real API call. Missing hooks:"
+      sed 's/^/    /' <<<"$missing_hooks"
+    fi
+    if [ -n "$missing_rules" ]; then
+      warn "gh allow rules missing: /wf will stop on gh permission prompts. Missing rules:"
+      sed 's/^/    /' <<<"$missing_rules"
+    fi
+    echo
+
+    answer=""
+    if [ "$NO_SETTINGS" = false ] && [ -t 0 ]; then
+      read -r -p "Add these to $SETTINGS? Existing settings are kept. [y/N] " answer || answer=""
+    fi
+    case "$answer" in
+      [yY]|[yY][eE][sS])
+        merged_json="$(sq merged)"
+        if [ -f "$SETTINGS" ]; then
+          backup="$SETTINGS.wf-backup-$(date +%Y%m%d-%H%M%S)"
+          cp "$SETTINGS" "$backup"
+          echo "  Backed up the current file to $backup"
+        fi
+        printf '%s\n' "$merged_json" > "$SETTINGS"
+        say "Settings: added the missing entries to $SETTINGS."
+        ;;
+      *)
+        manual_steps
+        ;;
+    esac
+  fi
 fi
 echo
 say "Then, in Claude Code:"
