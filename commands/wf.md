@@ -112,10 +112,11 @@ Local checks are scoped to changed files. CI is the full check, so it is the fin
 1. Spawn `wf-github` `CHECKS <pr>` (one spawn per PR, all in one message). It watches for up to about 9 minutes and returns `PASS`, `NONE`, `PENDING`, or `FAIL` with each failing check and a log excerpt.
 2. **`PASS` / `NONE`** → spawn `wf-linear` `SET_STATUS <id> "In Review"` (Code Review on teams without In Review). Done. Linear's GitHub integration may already have moved the ticket when the PR opened; the call is idempotent.
 3. **`PENDING`** → call `CHECKS` again, up to 6 calls (about 1 hour). If it is still pending, set In Review anyway and note `CI still running` in the report.
-4. **`FAIL`** → spawn `wf-executor` in that worktree with the failing checks and log excerpts as the fix list, plus the `CONTEXT_PACK`. Tell it: fix the failures this diff caused, verify narrowly, commit. If a failure isn't caused by this diff (flaky, infra, already failing on base), return `BLOCKED: unrelated — <evidence>` instead of changing code.
+4. **`FAIL` on a PR-metadata check** (the failing check lints the PR title or description, e.g. "Validate PR Title"): no code change. Read the error, build a compliant title, and spawn `wf-github` `EDIT_TITLE <pr> "<new title>"`. The check re-runs on its own; go back to 1. This counts toward the fix-round budget.
+5. **`FAIL`** on anything else → spawn `wf-executor` in that worktree with the failing checks and log excerpts as the fix list, plus the `CONTEXT_PACK`. Tell it: fix the failures this diff caused, verify narrowly, commit. If a failure isn't caused by this diff (flaky, infra, already failing on base), return `BLOCKED: unrelated — <evidence>` instead of changing code.
    - Executor committed → `wf-github` `PUSH`, then go back to 1.
-   - `BLOCKED: unrelated` → `wf-github` `RERUN_FAILED <pr>` once, then go back to 1. A second unrelated failure ends the loop.
-5. **Budget: 3 fix rounds per PR.** If CI is still red after that (or after a second unrelated failure):
+   - `BLOCKED: unrelated` → `wf-github` `RERUN_FAILED <pr>` once (pass the failing check links from `CHECKS`), then go back to 1. A second unrelated failure ends the loop.
+6. **Budget: 3 fix rounds per PR.** If CI is still red after that (or after a second unrelated failure):
    - `wf-github` `MARK_DRAFT <pr>`.
    - `wf-github` `COMMENT_PR` with the failing checks, what was tried, and whether it looks unrelated to the diff.
    - The ticket stays In Progress.
@@ -153,7 +154,7 @@ Linear: <identifier> — <ticket url>
 
 **The one exception is required operational follow-up** - a manual step without which the merged change silently does nothing (a UI reorder, a facet to add, a flag to flip, a backfill to run). Keep those: one numbered line each under `## After apply (manual, required)`, giving the action and the consequence of skipping it. Every other detail about them goes on the ticket, not here.
 
-Title: `<identifier>: <ticket title>`, unless the repo's own convention (from `PR_HISTORY`, its `CLAUDE.md`, or the spec) prescribes a different format - then follow the repo. Never pad to look thorough. A short PR body reads as competence.
+Title: `<type>(<scope>): <short description> [<identifier>]` — e.g. `fix(webhooks): Keep auditor sessions out of subscription routes [GRC-3933]` — where `type` is one of `feat`, `fix`, `chore`, `refactor`, `docs`, `test` and `scope` is the area of the code. Drata repos lint PR titles and require the ticket key in brackets at the end. If the repo's own convention (from `PR_HISTORY` or its `CLAUDE.md`) differs, follow the repo. Never pad to look thorough. A short PR body reads as competence.
 
 **Code comments in the diff follow the same rule**: default to none; when one is earned, 1-3 lines saying what this is and why it exists; never a multi-paragraph block, and never a comment used to park history, rationale, accepted risks, or runbook steps. The executor and reviewer enforce this. Same for anything written back to Linear: short, plain, no padding.
 

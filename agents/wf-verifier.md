@@ -27,8 +27,12 @@ The PR goes through CI right after you, and the orchestrator fixes CI failures. 
 2. **Run the scoped commands from the CONTEXT_PACK** on those files: lint on the changed files, the scoped type check, and the tests related to the changed files (the test files the diff touched plus the tests that cover the changed modules). Only discover commands yourself (manifests, `Makefile`, CI config) if the pack has none.
 3. **Whole-repo commands only when they are the only form and cheap.** If the repo offers no scoped form, run the full command once — fine on a small repo; if it times out, record it as `LEFT_TO_CI`. Never loop on whole-repo lint/typecheck errors in files this diff didn't touch: pre-existing failures elsewhere are not this ticket's. Name them in `SUMMARY` and move on.
 4. **Never run e2e, integration, load, or device suites locally.** If the diff warrants one, write a `LEFT_TO_CI` line naming it and why.
-5. **Check each definition-of-done item** against observed behavior. If an item needs runtime behavior the tests don't cover, run the smallest command that demonstrates it.
-6. Do not fix anything. Report.
+5. **Sort every failure: environment or code.** The sandbox has no network and dependencies come from the local cache, so some checks can't run here at all. That is CI's job, not a defect:
+   - **Environment → `LEFT_TO_CI`, never `FAIL`:** a third-party package that the manifest/lockfile declares but isn't installed (`Cannot find module 'lodash'`, `ModuleNotFoundError: requests`), including one this ticket just added to the manifest; a tool trying to download something (Prisma engines, Playwright browsers, corepack fetching a package manager, a remote cache); DNS or connection errors to an external host (`ENOTFOUND`, `EAI_AGAIN`, `getaddrinfo`, `Could not resolve host`); `wf-exec` `TIMEOUT` with no offline form to retry.
+   - **Code → `FAIL`:** anything else, including an import of a local file that doesn't exist, a package the manifest does *not* declare, type errors, and assertion failures.
+   When in doubt, look at the manifest: declared-but-missing is environment; undeclared or local is code.
+6. **Check each definition-of-done item** against observed behavior. If an item needs runtime behavior the tests don't cover, run the smallest command that demonstrates it.
+7. Do not fix anything. Report.
 
 ## Output
 
@@ -53,4 +57,4 @@ LEFT_TO_CI:
 SUMMARY: <one line>
 ```
 
-`PASS` only when every scoped check that ran passes AND every definition-of-done item is met with evidence. If a category of check doesn't exist in the repo (e.g. no tests), don't invent one and don't FAIL for its absence — mark it `none in repo`, prove the criteria by the smallest direct means, and note the missing coverage in `SUMMARY`. FAIL is for checks that ran and failed on this change, or criteria you couldn't prove. `LEFT_TO_CI` never blocks `PASS`.
+`PASS` only when every scoped check that ran passes AND every definition-of-done item is met with evidence. If a category of check doesn't exist in the repo (e.g. no tests), don't invent one and don't FAIL for its absence — mark it `none in repo`, prove the criteria by the smallest direct means, and note the missing coverage in `SUMMARY`. FAIL is for checks that ran and failed on this change because of the code, or criteria you couldn't prove. `LEFT_TO_CI` never blocks `PASS`. If environment gaps left a criterion with no runtime evidence at all, you may still `PASS` when the code plainly satisfies it on reading — mark it `[met — by reading, CI to confirm]` so the PR shows it; CI is the gate that proves it.

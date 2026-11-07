@@ -9,9 +9,11 @@
       "Bash(gh pr checks:*)",
       "Bash(gh pr comment:*)",
       "Bash(gh pr ready:*)",
+      "Bash(gh pr edit:*)",
       "Bash(gh run view:*)",
       "Bash(gh run rerun:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(~/.claude/bin/wf-ci-checks:*)"
     ]
   },
   "hooks": {

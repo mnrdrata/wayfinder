@@ -37,9 +37,9 @@ mkdir -p "$CLAUDE"/{agents,commands,bin,hooks}
 
 cp "$REPO"/agents/wf-*.md      "$CLAUDE/agents/"
 cp "$REPO"/commands/wf*.md     "$CLAUDE/commands/"   # wf.md + wf-*.md
-cp "$REPO"/bin/wf-exec "$REPO"/bin/wf-fetch-handoff "$CLAUDE/bin/"
+cp "$REPO"/bin/wf-exec "$REPO"/bin/wf-fetch-handoff "$REPO"/bin/wf-ci-checks "$CLAUDE/bin/"
 cp "$REPO"/hooks/wf-*.sh       "$CLAUDE/hooks/"
-chmod +x "$CLAUDE"/bin/wf-exec "$CLAUDE"/bin/wf-fetch-handoff "$CLAUDE"/hooks/wf-*.sh
+chmod +x "$CLAUDE"/bin/wf-exec "$CLAUDE"/bin/wf-fetch-handoff "$CLAUDE"/bin/wf-ci-checks "$CLAUDE"/hooks/wf-*.sh
 
 # --- retire files from earlier versions (they would otherwise linger in ~/.claude) ---
 # /wf-run became /wf; /wf-prime and its cartographer agent are gone (/wf reads the repo's
@@ -101,7 +101,8 @@ fi
 # Without allow rules, wf-github's gh calls prompt (or are denied in auto mode) and a
 # hands-off /wf run stalls with partial PR history or no PR at all.
 if command -v jq >/dev/null 2>&1 && [ -f "$SETTINGS" ] \
-   && jq -e '.permissions.allow[]? | select(startswith("Bash(gh pr create"))' "$SETTINGS" >/dev/null 2>&1; then
+   && jq -e '.permissions.allow[]? | select(startswith("Bash(gh pr create"))' "$SETTINGS" >/dev/null 2>&1 \
+   && jq -e '.permissions.allow[]? | select(startswith("Bash(~/.claude/bin/wf-ci-checks"))' "$SETTINGS" >/dev/null 2>&1; then
   say "gh permissions: allow rules present."
 else
   warn "gh allow rules not found — /wf will stop on gh permission prompts."

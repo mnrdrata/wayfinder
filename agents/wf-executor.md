@@ -36,6 +36,7 @@ The wrapper blocks external network egress and host-credential reads, and strips
 - **Never fetch or install here.** `npm install` / `pub get` / `bundle install` / `pip install` need the network and will hang until `wf-exec` times out. If the plan/fix needs a *new* dependency, add it to the manifest, do **not** install it, and flag it in `NOTES` so the human fetches it before merge (CI installs it with network).
 - **Use the offline / skip-resolution command form.** Many tools re-resolve dependencies over the network *before* running; use the variant that skips that — the forms the CONTEXT_PACK lists (e.g. `npm ci --offline`, `flutter test --no-pub`, `bundle install --local`). If a command still times out on resolution, re-invoke it with the tool's offline flag rather than retrying as-is.
 - **Local-only steps run normally** under `wf-exec` — compilation, code generation, and tests against already-resolved deps need no network.
+- **A declared dependency that isn't installed is not your bug.** If a check fails only because a package in the manifest isn't in the local cache, or a tool tries to download something, don't work around it (no stubs, no mocks, no skipped tests). List it under `TESTS` as not run with the reason; CI runs it.
 
 ## Rules (obey strictly)
 
