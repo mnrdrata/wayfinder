@@ -23,7 +23,7 @@ say "Installing Wayfinder into $CLAUDE"
 # --- platform + dependency checks (warn, don't block) --------------------------
 if [ "$(uname)" != "Darwin" ]; then
   warn "Not macOS: the execution sandbox uses macOS 'sandbox-exec' (seatbelt) and"
-  warn "will not work here. The agents/commands still install, but /wf-run's"
+  warn "will not work here. The agents/commands still install, but /wf's"
   warn "sandboxed test/build execution is macOS-only. See README > Platform support."
 fi
 for dep in git jq gh; do
@@ -41,6 +41,11 @@ cp "$REPO"/bin/wf-exec "$REPO"/bin/wf-fetch-handoff "$CLAUDE/bin/"
 cp "$REPO"/hooks/wf-*.sh       "$CLAUDE/hooks/"
 chmod +x "$CLAUDE"/bin/wf-exec "$CLAUDE"/bin/wf-fetch-handoff "$CLAUDE"/hooks/wf-*.sh
 
+# --- retire files from earlier versions (they would otherwise linger in ~/.claude) ---
+# /wf-run became /wf; /wf-prime and its cartographer agent are gone (/wf reads the repo's
+# own CLAUDE.md/AGENTS.md instead of a generated CONTEXT.md).
+rm -f "$CLAUDE/commands/wf-run.md" "$CLAUDE/commands/wf-prime.md" "$CLAUDE/agents/wf-cartographer.md"
+
 # --- generate the sandbox profile for this machine -----------------------------
 # The seatbelt profile needs literal absolute paths; fill in this machine's dirs —
 # __HOME__ = your home, __CLAUDE__ = the Claude config dir (CLAUDE_HOME may relocate it).
@@ -48,7 +53,7 @@ sed -e "s#__CLAUDE__#$CLAUDE#g" -e "s#__HOME__#$HOME#g" "$REPO/ticket-workflow-s
   > "$CLAUDE/ticket-workflow-sandbox.sb"
 
 # --- learned-gaps data log (append-only; never clobber an existing one) ---------
-# wf-spec-builder reads this as reference examples; /wf-run appends to it when a planner
+# wf-spec-builder reads this as reference examples; /wf appends to it when a planner
 # reports SPEC_GAPS. It holds ticket-derived text, so it is DATA, never an agent prompt —
 # seed it empty, once, and leave any existing log (a user's accumulated history) untouched.
 [ -f "$CLAUDE/wf-spec-gaps.md" ] || cp "$REPO/wf-spec-gaps.md" "$CLAUDE/wf-spec-gaps.md"
@@ -91,9 +96,20 @@ else
   Then re-run ./install.sh — this warning repeats until both hooks are detected.
 EOF
 fi
+
+# --- gh permission check (detect-and-warn) --------------------------------------
+# Without allow rules, wf-github's gh calls prompt (or are denied in auto mode) and a
+# hands-off /wf run stalls with partial PR history or no PR at all.
+if command -v jq >/dev/null 2>&1 && [ -f "$SETTINGS" ] \
+   && jq -e '.permissions.allow[]? | select(startswith("Bash(gh pr create"))' "$SETTINGS" >/dev/null 2>&1; then
+  say "gh permissions: allow rules present."
+else
+  warn "gh allow rules not found — /wf will stop on gh permission prompts."
+  warn "Add the \"permissions.allow\" rules from $REPO/settings.hooks.json to $SETTINGS."
+fi
 echo
 say "Then, in Claude Code:"
 echo "  - Connect the Linear MCP:  /mcp"
 echo "  - Verify gh is authed:     gh auth status"
-echo "  - Prime a repo:            /wf-prime"
-echo "  - Try it:                  /wf-spec <TICKET-ID>  then  /wf-run <TICKET-ID>"
+echo "  - Try it, from a repo:     /wf <TICKET-ID> [<TICKET-ID>...]"
+echo "  - Optional, vague tickets: /wf-spec <TICKET-ID> first"

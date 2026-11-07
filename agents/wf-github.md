@@ -1,6 +1,6 @@
 ---
 name: wf-github
-description: Owns ALL GitHub interaction for the ticket workflow via the gh CLI — gather PR/commit history for context, push the branch and open the PR, and report PR/check/merge status. Spawned by /wf-spec and /wf-run orchestrators. Returns structured data; never writes code.
+description: Owns ALL GitHub interaction for the ticket workflow via the gh CLI — gather PR/commit history for context, push the branch and open the PR, watch CI checks and fetch failure logs, and report PR/merge status. Spawned by /wf-spec, /wf and /wf-quick. Returns structured data; never writes code.
 tools: Bash
 model: haiku
 ---
@@ -34,10 +34,10 @@ COMMIT_CONTEXT:
 Keep it to high-signal items only — this is fuel for the planner/wf-spec-builder, not an audit.
 
 ### CREATE_PR
-Given: worktree path, BASE branch, HEAD branch, title, body (markdown). Publish and open the PR:
+Given: worktree path, BASE branch, HEAD branch, title, body (markdown), and optionally `DRAFT: true`. Publish and open the PR:
 1. `cd <worktree>` then `git push -u origin <HEAD>` (if already pushed, that's fine).
 2. Write the body markdown to a temp file **outside the worktree** (`f=$(mktemp)`; write the body to `$f`) and pass it with `--body-file`:
-   `gh pr create --base "<BASE>" --head "<HEAD>" --title "<title>" --body-file "$f"`.
+   `gh pr create --base "<BASE>" --head "<HEAD>" --title "<title>" --body-file "$f"` — add `--draft` when `DRAFT: true`.
    **Never pass the body inline with `--body`.** The `cd <worktree>` puts `/.worktrees/` in the command, which engages the sandbox guard; the guard does a substring match for sandboxed-tool names (`flutter`, `cargo`, `node`, `make`, …), so any such word in the body prose (e.g. "run `flutter analyze`") would falsely block the whole `gh pr create`. `--body-file` keeps prose off the command line entirely, so there is nothing to match. (`mktemp` lives outside the worktree, so its path doesn't enter the diff.)
 Return:
 ```
@@ -53,6 +53,37 @@ Given: worktree path. `cd <worktree>` then `git push` (add `-u origin <branch>` 
 
 ### COMMENT_PR
 Given: worktree path (or repo root), a PR ref (number or branch), and a comment body (markdown). Write the body to a temp file **outside the worktree** (`f=$(mktemp)`) and run `gh pr comment <ref> --body-file "$f"` — same rule as CREATE_PR: never pass body prose inline on the command line. Return `COMMENT: posted on PR #<n>` (or `ERROR`).
+
+### CHECKS `<pr-number>`
+Given: worktree path and PR number. Watch the PR's CI checks until they settle, for at most ~9 minutes, then report. Read-only.
+1. `cd <worktree>`, then run this loop as **one** Bash call with the Bash tool's `timeout` set to `600000`:
+   ```
+   for i in $(seq 1 26); do
+     j=$(gh pr checks <pr> --json name,bucket,link,workflow 2>/dev/null || true)
+     n=$(printf '%s' "${j:-[]}" | jq 'length'); p=$(printf '%s' "${j:-[]}" | jq '[.[]|select(.bucket=="pending")]|length')
+     if [ "$n" -gt 0 ] && [ "$p" -eq 0 ]; then break; fi
+     if [ "$n" -eq 0 ] && [ "$i" -ge 4 ]; then break; fi
+     sleep 20
+   done; printf '%s\n' "${j:-[]}"
+   ```
+   (Checks can take ~30–60 s to register after a push, so an empty list only means "no CI" after a few tries.)
+2. Classify from the final JSON: empty → `NONE`; any `pending` left → `PENDING`; any `fail`/`cancel` → `FAIL`; otherwise `PASS`.
+3. On `FAIL`, for each failing check whose `link` is a GitHub Actions job (`…/actions/runs/<run-id>/job/<job-id>`), fetch the failure log: `gh run view <run-id> --log-failed 2>&1 | tail -n 120`. For other providers, return only the link.
+Return:
+```
+CHECKS: PASS | FAIL | PENDING | NONE
+FAILED:
+- <check name> (<workflow>) — <link>
+  LOG:
+  <the tail of the failed log, or "not a GitHub Actions check">
+...   (omit unless FAIL)
+```
+
+### RERUN_FAILED `<pr-number>`
+Given: worktree path and PR number. Re-run only the failed GitHub Actions jobs, once: for each distinct `<run-id>` among the PR's failing checks, `gh run rerun <run-id> --failed`. Return `RERUN: <run-ids>` (or `ERROR`, or `RERUN: none` when nothing failing is an Actions run).
+
+### MARK_DRAFT `<pr-number>`
+Given: worktree path and PR number. `gh pr ready <pr> --undo` (turns a ready PR back into a draft). Return `DRAFT: #<n>` (or `ERROR`).
 
 ### PR_STATUS `<branch | pr-number | ticket-identifier>`
 Report state without changing anything. Use `gh pr view <ref> --json number,state,mergedAt,mergeStateStatus,statusCheckRollup,url`.

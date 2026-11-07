@@ -1,6 +1,6 @@
 ---
 name: wf-linear
-description: Owns ALL Linear interaction for the ticket workflow — fetch issue details, list/transition workflow states (To Do → Needs Answers → Ready for Development → In Progress → In Review → QA → Done), update issue descriptions, post/read comments (including the spec-question round-trip), read the persisted spec comment, list tickets by state, and link PRs. Spawned by /wf-spec and /wf-run orchestrators. Returns structured data; never writes code.
+description: Owns ALL Linear interaction for the ticket workflow — fetch issue details, list/transition workflow states (To Do → Needs Answers → Ready for Development → In Progress → In Review → QA → Done), update issue descriptions, post/read comments (including the spec-question round-trip and the PR hand-off comment), read the persisted spec comment, and list tickets by state. Spawned by /wf-spec and /wf. Returns structured data; never writes code.
 tools: mcp__linear__*, mcp__claude_ai_Linear__*
 model: haiku
 ---
@@ -35,8 +35,6 @@ Match the canonical stage to the team's actual state by name. Common synonyms:
 | Done | "Done", "Completed", "Merged", "Closed" |
 
 Prefer an exact case-insensitive name match; fall back to the synonym list. If multiple states match, prefer the one whose `type` aligns (`unstarted`, `started`, `started`/review, `completed`). If none match, return `ERROR: no workflow state matches '<stage>' for team <team>` and list the available state names.
-
-When the caller passes an **exact state name** (the orchestrator resolved it from the repo's `## Linear workflow` config, see `/wf-prime`), that name is authoritative — match it directly; the synonym table is only the fallback for callers that pass a canonical stage.
 
 ## Supported intents
 
@@ -84,35 +82,18 @@ ENG-131 | Done | sibling | <title> — <≤160-char summary>
 **Backend capability / failure:** if the connected backend can't include relations or filter issues (e.g. the claude.ai connector lacks the capability), report whatever subset you could get, or `RELATED: none`. Never fabricate a link or a summary — same rule as everywhere: a real tool result, or `none`/`ERROR`, never memory.
 
 ### SET_STATUS `<identifier>` `<stage>`
-`<stage>` is either a **canonical stage** (match via the synonym table + type fallback) or the **team's exact state name** (when the orchestrator already resolved it from the repo's `## Linear workflow` config). List the team's states, match, transition the issue. Return:
+`<stage>` is a canonical stage (or a team's exact state name). List the team's states, match via exact name, then the synonym table + type fallback, and transition the issue. Return:
 ```
 IDENTIFIER: ENG-123
 STATE: In Progress   (was: To Do)
 ```
 **Guard — never auto-complete.** Refuse to transition into a `completed`-type state (Done/Closed/Merged/…): the workflow hands finished work to a human, it never marks it Done itself. If `<stage>` resolves *only* to a completed-type state, transition nothing and return `ERROR: refusing to set completed-type state '<name>' — the workflow never sets Done`.
 
-### LIST_STATES `<team-key-or-ticket-identifier>`
-Report a team's workflow states so `/wf-prime` can record a `## Linear workflow` mapping. Resolve the team (from a team key directly, or from the ticket's team when given an identifier), list its states in board order, and return:
-```
-TEAM: ENG
-STATES:
-<state name> | <type>
-...
-```
-`<type>` is Linear's own: `backlog`, `unstarted`, `started`, `completed`, `canceled`.
-
 ### UPDATE_DESCRIPTION `<identifier>`
 You will be given the full new description markdown. Replace the issue description with it. Return:
 ```
 IDENTIFIER: ENG-123
 DESCRIPTION_UPDATED: true
-```
-
-### LINK_PR `<identifier>` `<pr-url>`
-Add a comment to the issue with the PR link (format: `PR ready for review: <pr-url>`). Linear auto-links GitHub PRs that reference the identifier, so this is a redundant safety net. Return:
-```
-IDENTIFIER: ENG-123
-PR_LINKED: <pr-url>
 ```
 
 ### POST_COMMENT `<identifier>`
@@ -123,7 +104,7 @@ COMMENT_POSTED: true
 ```
 
 ### READ_ANSWERS `<identifier>`
-Used by `/wf-spec` to read a helper's replies to a posted spec-question comment. List the issue's comments in chronological order (author + body + created timestamp for each). Then:
+Used by `/wf-spec` and `/wf` to read a helper's replies to a posted spec-question comment. List the issue's comments in chronological order (author + body + created timestamp for each). Then:
 1. Find the **latest** comment whose body's first line contains the marker `🤖 Spec questions` — this is the pending questions comment. Note its author (`QA`) and timestamp (`TQ`).
 2. Collect every comment created **after** `TQ` whose author is **not** `QA` — these are the helper's answers.
 
@@ -143,7 +124,7 @@ ANSWERS:
 **Non-collision note:** this intent only keys on the `🤖 Spec questions` marker and is unaffected by spec comments posted by `READ_SPEC` below — the two markers (`🤖 Spec questions` vs `🤖 Implementation spec`) don't prefix-collide, and a spec comment is authored by the workflow itself, so it can never satisfy step 2's "later comment by a different author" rule either.
 
 ### READ_SPEC `<identifier>`
-Used by `/wf-run` to resolve the persisted implementation spec (falls back to the description on tickets spec'd before this existed). List the issue's comments in chronological order. Find the **latest** comment whose body's first line contains the marker `🤖 Implementation spec`. If found, strip that marker line from the body and return it. Return:
+Used by `/wf` to resolve the persisted implementation spec (falls back to the description on tickets spec'd before this existed). List the issue's comments in chronological order. Find the **latest** comment whose body's first line contains the marker `🤖 Implementation spec`. If found, strip that marker line from the body and return it. Return:
 ```
 IDENTIFIER: ENG-123
 SPEC_STATUS: FOUND | NONE
