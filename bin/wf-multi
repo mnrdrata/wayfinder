@@ -1,0 +1,98 @@
+#!/bin/bash
+# wf-multi — build a Linear ticket that spans repos, one full /wf session per repo, in order.
+#
+# A Claude Code session loads one repo's CLAUDE.md, project agents, hooks and skills: the
+# ones where it starts. So each repo's part of a ticket is built by its own headless session,
+# started in that repo's checkout:
+#   1. `/wf --split-only <ticket>` splits the ticket into one [repo] sub-issue per repo
+#      (or reuses the sub-issues an earlier run made) and prints them in build order.
+#   2. For each sub-issue in order, `/wf <sub-issue>` runs in that repo's checkout
+#      (from ~/.claude/wf-repos.json). A later repo's session finds the earlier repo's PR
+#      through Linear and builds against it.
+# The chain stops at the first sub-issue that doesn't finish. Re-running resumes: /wf skips
+# sub-issues whose PR is already open, and reuses worktrees for the rest.
+#
+# Usage:  wf-multi <ticket-id>
+# Env:    WF_PERMISSION_MODE   permission mode for each headless session (default: auto)
+#         CLAUDE_HOME          Claude config dir (default: ~/.claude)
+# Exit:   0 every sub-issue finished · 1 usage/setup error · 2 a sub-issue didn't finish
+#         3 the ticket needs a repo that isn't in wf-repos.json
+set -uo pipefail
+
+TICKET="${1:-}"
+if [ -z "$TICKET" ] || [ "$#" -ne 1 ]; then
+  echo "usage: wf-multi <ticket-id>" >&2
+  exit 1
+fi
+
+CLAUDE_DIR="${CLAUDE_HOME:-$HOME/.claude}"
+MAP="$CLAUDE_DIR/wf-repos.json"
+MODE="${WF_PERMISSION_MODE:-auto}"
+LOG_DIR="$CLAUDE_DIR/wf-logs/$TICKET/$(date +%Y%m%d-%H%M%S)"
+
+say() { printf '%s %s\n' "$(date +%H:%M)" "$*"; }
+die() { say "ERROR: $1" >&2; exit "${2:-1}"; }
+
+for dep in claude jq git; do
+  command -v "$dep" >/dev/null 2>&1 || die "missing dependency: $dep"
+done
+[ -f "$MAP" ] || die "no repo map at $MAP (copy wf-repos.example.json there and set your checkout paths)"
+mkdir -p "$LOG_DIR" || die "can't create $LOG_DIR"
+
+# Run one headless session in <dir> and print its final text. Full JSON goes to <log>.json.
+run_session() {
+  local dir="$1" prompt="$2" log="$3"
+  (cd "$dir" && claude -p "$prompt" --permission-mode "$MODE" --output-format json) \
+    >"$log.json" 2>"$log.err"
+  local rc=$?
+  if [ "$rc" -ne 0 ] || [ "$(jq -r '.is_error // false' "$log.json" 2>/dev/null)" = "true" ]; then
+    say "session failed in $dir (exit $rc); see $log.json and $log.err" >&2
+    return 1
+  fi
+  jq -r '.result // empty' "$log.json" | tee "$log.txt"
+}
+
+# The split can run from any listed checkout: it only reads the checkouts and talks to Linear.
+SPLIT_DIR="$(jq -r '.repos[].path' "$MAP" | while read -r p; do [ -d "$p/.git" ] || [ -f "$p/.git" ] && { echo "$p"; break; }; done)"
+[ -n "$SPLIT_DIR" ] || die "no checkout in $MAP exists on this machine"
+
+say "$TICKET: splitting by repo (logs: $LOG_DIR)"
+SPLIT_OUT="$(run_session "$SPLIT_DIR" "/wf --split-only $TICKET" "$LOG_DIR/split")" || die "split session failed"
+UNITS="$(printf '%s\n' "$SPLIT_OUT" | awk '$1 == "UNIT" { print $2, $3, $4 }')"
+[ -n "$UNITS" ] || die "split printed no UNIT lines; see $LOG_DIR/split.txt"
+
+if printf '%s\n' "$UNITS" | awk '$3 == "missing" { found = 1 } END { exit !found }'; then
+  printf '%s\n' "$UNITS" | awk '$3 == "missing" { print "  needs a checkout of " $2 " (" $1 ")" }' >&2
+  die "add the missing repos to $MAP, then re-run" 3
+fi
+
+say "$TICKET: build order:"
+printf '%s\n' "$UNITS" | awk '{ print "  " $1 " [" $2 "] in " $3 }'
+
+STATUS=0
+REMAINING="$UNITS"
+while read -r ID REPO DIR; do
+  [ -n "$ID" ] || continue
+  REMAINING="$(printf '%s\n' "$REMAINING" | sed '1d')"
+  say "$ID [$REPO]: building in $DIR"
+  OUT="$(run_session "$DIR" "/wf $ID" "$LOG_DIR/$ID")" || { STATUS=2; break; }
+  RESULT="$(printf '%s\n' "$OUT" | awk -v id="$ID" '$1 == "WF_RESULT" && $2 == id { print $3, $4 }' | tail -1)"
+  STATE="${RESULT%% *}"
+  PR="${RESULT#* }"
+  case "$STATE" in
+    finished|skipped)
+      say "$ID [$REPO]: $STATE, ${PR:-no PR}" ;;
+    "")
+      say "$ID [$REPO]: no WF_RESULT line; see $LOG_DIR/$ID.txt"; STATUS=2; break ;;
+    *)
+      say "$ID [$REPO]: $STATE, ${PR:-no PR}; stopping the chain"; STATUS=2; break ;;
+  esac
+done <<<"$UNITS"
+
+if [ "$STATUS" -ne 0 ] && [ -n "$REMAINING" ]; then
+  say "$TICKET: not started:"
+  printf '%s\n' "$REMAINING" | awk 'NF { print "  " $1 " [" $2 "]" }'
+fi
+[ "$STATUS" -eq 0 ] && say "$TICKET: every repo finished. Review and merge happen on GitHub."
+say "$TICKET: logs in $LOG_DIR"
+exit "$STATUS"
