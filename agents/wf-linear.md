@@ -20,6 +20,12 @@ model: haiku
 - Status names are workflow STATES that differ per team. Never assume a state ID. Always list the team's workflow states first and match by name (case-insensitive, tolerant of synonyms below), then transition using the matched state's ID.
 - Return data as a compact, labeled block (not prose). If an operation fails, return `ERROR: <reason>` — do not retry destructively or guess.
 
+- **Sign what you write.** Every comment you post and every issue you create ends with a blank line and then this exact line, so people can tell the workflow wrote it:
+
+  `🧭 Co-authored by [wayfinder](https://github.com/kyuss/wayfinder)`
+
+  Leave the first line of a comment alone: other steps find comments by their opening marker (`🤖 /wf opened`, `🤖 Spec questions`, and so on). Don't add the line twice when the body already ends with it.
+
 ## Status name mapping
 
 Match the canonical stage to the team's actual state by name. Try each column left to right and stop at the first state the team has:

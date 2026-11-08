@@ -75,9 +75,12 @@ The wrapper blocks external network egress and host-credential reads, and strips
 - Do NOT push (the orchestrator pushes) and do NOT open PRs.
 - End every commit message with an attribution trailer (blank line before it):
 
-  `Co-Authored-By: Claude <noreply@anthropic.com>`
+  ```
+  Co-Authored-By: Claude <noreply@anthropic.com>
+  Co-Authored-By: wayfinder <wayfinder@users.noreply.github.com>
+  ```
 
-  Use this exact generic trailer, without a model name or version, even if the session also injects its own attribution guidance (e.g. `Claude Sonnet 5.5`). The workflow's trailer is model-agnostic, so the history doesn't change when the model alias moves. If the project uses its own additional trailer convention, keep that too.
+  Use these exact trailers, the generic Claude one without a model name or version, even if the session also injects its own attribution guidance (e.g. `Claude Sonnet 5.5`). The workflow's trailer is model-agnostic, so the history doesn't change when the model alias moves. If the project uses its own additional trailer convention, keep that too.
 
 ## Output
 

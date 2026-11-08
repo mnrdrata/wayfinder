@@ -55,6 +55,8 @@ Embed the images and animations inline, uploaded to Linear, so the comment reads
 
 **Observations (not blockers)**
 - <anything odd you noticed that the criteria don't cover>
+
+🧭 Co-authored by [wayfinder](https://github.com/kyuss/wayfinder)
 ```
 
 Keep the prose short. The evidence should carry the proof.
