@@ -63,10 +63,11 @@ CONTEXT_PACK:
 - patterns to follow: <the exact conventions/idioms this change must match, with an example path>
 - commands (scoped — what to run locally on THIS change):
   - lint: `<cmd on the changed files only>`
-  - typecheck: `<scoped form, or "CI only" if the repo has only a whole-project check that is slow>`
-  - test: `<cmd for the tests related to the changed files>` (single test: `<cmd>`)
+  - lint-fix: `<the same lint command's autofix form (e.g. --fix), on the changed files only, or "none">`
+  - typecheck: `<a form scoped to the changed files or one small package, or "CI only" when the repo has only a whole-project check>`
+  - test: `<cmd naming the specific test files for the changed code, never a folder or the whole suite>` (single test: `<cmd>`)
   - install: `<cmd>`
-  Give the **offline / skip-resolution** form of every command (`npm ci --offline`, `flutter test --no-pub`, `--frozen-lockfile`, …): project code runs in a sandbox with no external network. Only commands that exist in this repo. Never a whole-repo lint/typecheck/e2e run on a large repo — CI runs those.
+  Give the **offline / skip-resolution** form of every command (`npm ci --offline`, `flutter test --no-pub`, `--frozen-lockfile`, …): project code runs in a sandbox with no external network. Only commands that exist in this repo. Never a whole-repo lint, type check, test or e2e run, on any repo: on large ones they run out of memory and crash the machine, and CI runs them anyway.
 - repo rules: <instructions from CLAUDE.md/AGENTS.md that bind this change (e.g. "migrations need a down step"), or "none">
 - gotchas: <repo-specific traps relevant to this ticket, or "none">
 

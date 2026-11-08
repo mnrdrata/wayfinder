@@ -62,7 +62,8 @@ The wrapper blocks external network egress and host-credential reads, and strips
 - **Clean up only your own orphans**: remove imports/vars your change made unused; leave pre-existing dead code alone (mention it, don't delete).
 - **No plan, spec or notes files.** Some repos ask agents to save plans in a folder such as `.context/`. This workflow keeps plans out of the diff, so commit only the change itself.
 - Add/update tests as the plan specifies. Make them pass.
-- **Verify narrowly while you work.** Prove a step with the narrowest command that covers it — the single-test form from the CONTEXT_PACK, scoped to what you touched. Never run whole-repo lint, type check, or test suites: the verifier runs the scoped checks right after you, and CI runs everything.
+- **Verify narrowly while you work.** Prove a step with the narrowest command that covers it — the single-test form from the CONTEXT_PACK, scoped to what you touched. Never run whole-repo lint, type check, or test suites: on large repos they run out of memory and crash the machine. Pass file paths explicitly every time. The verifier runs the scoped checks right after you, and CI runs everything.
+- **Autofix before you commit.** Run the CONTEXT_PACK `lint-fix` command on exactly the files you changed (never a directory or the whole repo), so mechanical rules such as import order or formatting are fixed before review. Commit what it changes with your change. Skip it when the pack has no `lint-fix`.
 - A syntax-only check, or a command that timed out or failed to start, isn't verification — list it under `TESTS` as not run, with the reason.
 
 ## Atomic commits
