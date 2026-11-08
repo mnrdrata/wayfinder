@@ -27,8 +27,9 @@ an overview; when they disagree, the files win.
 
 | Path | What |
 |---|---|
-| `agents/wf-*.md` | 9 subagents: planner, executor, reviewer, verifier, runner, spec-builder, the Linear/GitHub boundary agents, and an eval judge |
-| `commands/wf*.md` | 5 slash commands: `/wf`, `/wf-spec`, `/wf-quick`, `/wf-eval`, `/wf-calibrate` |
+| `agents/wf-*.md` | 11 subagents: planner, executor, reviewer, verifier, runner, spec-builder, the Linear/GitHub boundary agents, an eval judge, and the docs assessor and builder |
+| `commands/wf*.md` | 6 slash commands: `/wf`, `/wf-spec`, `/wf-quick`, `/wf-docs`, `/wf-eval`, `/wf-calibrate` |
+| `bin/wf-docs` | Runs `/wf-docs` headless: a help-article request and a CS enablement guide when a built ticket needs them. `wf-run-ac` calls it after green evidence |
 | `bin/wf-exec` | Runs a repo's install/tests/lint inside a no-network, no-secrets sandbox |
 | `bin/wf-fetch-handoff` | Safely downloads a Linear design-handoff embed (allowlisted, size-capped, zip-slip-guarded) |
 | `hooks/` | Two guard hooks: sandbox enforcement + boundary-agent tool-call enforcement |
@@ -100,6 +101,15 @@ installer then prints the manual steps, and repeats the check on every run until
 nothing is missing.
 
 Then, in Claude Code: connect Linear (`/mcp`) and run `/wf <TICKET-ID>` from a repo.
+
+## Docs: help articles and CS enablement
+
+`/wf-docs <ticket>` (run by `wf-run-ac` after the evidence passes, or on its own) decides what documentation a shipped ticket needs. Most tickets need none.
+
+- **Help article.** A new page, route, navigation entry, wizard or flow gets a request for a new article. A change that makes an existing article wrong gets a request to update it, with the stale sentence quoted. The request is a Linear ticket for the technical writing team, matching a model request, with a full draft written to the UX content guidelines and the evidence screenshots when there are any. The ticket's project also gets the label the writing team's scan watches.
+- **CS enablement guide.** Required whenever there's a help article, and for significant behavior changes Support will see even without one. It's a Notion page under a shared parent, matching a model guide and the house writing format.
+
+Turn it on with a `docs` block in `~/.claude/wf-repos.json`; `wf-repos.example.json` documents each key. Without it the stage is skipped. Use `--assess-only` to see the verdict without writing anything.
 
 ## Linear workflow states
 

@@ -1,5 +1,5 @@
 {
-  "_comment": "Repo map for /wf. Copy to ~/.claude/wf-repos.json (install.sh does this once) and set each path to your local checkout. A ticket that spans repos is split into one sub-issue per repo, and each runs in the checkout listed here. A sub-issue title prefix like [api] is matched against name and aliases. List upstream repos first: that is the default build order when nothing else decides it. 'evidence' names the repo and Starfolk environment wf-evidence starts its acceptance-evidence session in. A repo that publishes packages other repos install can add 'prerelease': {'workflow': '<publish workflow file>', 'packages_dir': 'packages'}; /wf then publishes a prerelease from its PR branch for the downstream repo to build against.",
+  "_comment": "Repo map for /wf. Copy to ~/.claude/wf-repos.json (install.sh does this once) and set each path to your local checkout. A ticket that spans repos is split into one sub-issue per repo, and each runs in the checkout listed here. A sub-issue title prefix like [api] is matched against name and aliases. List upstream repos first: that is the default build order when nothing else decides it. 'evidence' names the repo and Starfolk environment wf-evidence starts its acceptance-evidence session in. A repo that publishes packages other repos install can add 'prerelease': {'workflow': '<publish workflow file>', 'packages_dir': 'packages'}; /wf then publishes a prerelease from its PR branch for the downstream repo to build against. Optional docs block turns on /wf-docs, which wf-run-ac runs after green evidence. help_article_team and help_article_label say where help-article requests go in Linear. project_label is added to the ticket's Linear project so the writing team's scan finds it. enablement_parent is the Notion page CS enablement guides go under. The two *_example links are model documents to match. content_coach names the UX content guidelines: a Glean agent id, and the skill file that agent reads, relative to the checkout of content_coach.repo. writing_guide is a glob for the house writing-format skill. Leave docs out to skip the stage.",
   "repos": [
     {
       "name": "api",
@@ -24,5 +24,19 @@
   "evidence": {
     "repo": "your-org/web",
     "environment": "<Starfolk environment that can deploy every repo together>"
+  },
+  "docs": {
+    "help_article_team": "Technical Writing",
+    "help_article_label": "Help Article",
+    "project_label": "Help Article Needed",
+    "help_article_example": "<Linear URL of a model help-article request>",
+    "enablement_parent": "<Notion URL of the page enablement guides go under>",
+    "enablement_example": "<Notion URL of a model enablement guide>",
+    "content_coach": {
+      "glean_agent": "<Glean agent id>",
+      "repo": "web",
+      "skill": ".claude/skills/<content-coach>/SKILL.md"
+    },
+    "writing_guide": "~/.claude/plugins/marketplaces/*/plugins/writing/skills/format/SKILL.md"
   }
 }

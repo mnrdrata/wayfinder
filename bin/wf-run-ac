@@ -6,6 +6,8 @@
 # 2. Runs wf-run: one /wf session per repo, PRs opened, CI green.
 # 3. When every repo finished, runs wf-evidence with those PRs. It deploys them together,
 #    proves each acceptance criterion, and posts one complete comment on the ticket.
+# 4. When the evidence passed (or was skipped), runs wf-docs: a help-article request and a CS
+#    enablement guide when the change needs them. Its result never changes this exit code.
 # Use wf-run on its own to build without the evidence step.
 #
 # Usage:  wf-run-ac <ticket-id>
@@ -44,7 +46,10 @@ WF_EVIDENCE_MODE="$MODE" "$BIN/wf-evidence" "$TICKET" ${PRS[@]+"${PRS[@]}"}
 EVIDENCE_STATUS=$?
 case "$EVIDENCE_STATUS" in
   0) say "$TICKET: built, and every acceptance criterion passed. Review and merge happen on GitHub." ;;
-  4) say "$TICKET: built; acceptance evidence skipped." ; exit 0 ;;
-  *) say "$TICKET: built, but the acceptance evidence isn't all green; see the comment on $TICKET." ;;
+  4) say "$TICKET: built; acceptance evidence skipped." ;;
+  *) say "$TICKET: built, but the acceptance evidence isn't all green; see the comment on $TICKET. Docs wait for green evidence."
+     exit "$EVIDENCE_STATUS" ;;
 esac
+"$BIN/wf-docs" "$TICKET" || say "$TICKET: docs step didn't finish; re-run: wf-docs $TICKET"
+[ "$EVIDENCE_STATUS" -eq 4 ] && exit 0
 exit "$EVIDENCE_STATUS"

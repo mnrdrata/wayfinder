@@ -1,0 +1,48 @@
+#!/bin/bash
+# wf-docs — decide whether a built ticket needs a help article and a CS enablement guide, and
+# write them. Runs `/wf-docs <ticket>` as one headless session. wf-run-ac calls it after the
+# acceptance evidence, so the article request can reuse the evidence screenshots.
+#
+# The session starts in the checkout of the repo that holds the UX content coach
+# (docs.content_coach.repo in wf-repos.json), so that repo's skills load; else the first checkout.
+#
+# Usage:  wf-docs <ticket-id> [--assess-only]
+# Env:    WF_PERMISSION_MODE, CLAUDE_HOME, WF_LOG_DIR (as wf-run)
+# Output: the session's final WF_DOCS line.
+# Exit:   0 done (including "no docs needed") · 1 usage/setup error · 2 the session failed
+#         4 skipped: no `docs` block in wf-repos.json
+set -uo pipefail
+
+TICKET="${1:-}"
+[ -n "$TICKET" ] || { echo "usage: wf-docs <ticket-id> [--assess-only]" >&2; exit 1; }
+shift
+FLAGS="$*"
+
+CLAUDE_DIR="${CLAUDE_HOME:-$HOME/.claude}"
+MAP="$CLAUDE_DIR/wf-repos.json"
+MODE="${WF_PERMISSION_MODE:-auto}"
+LOG_DIR="${WF_LOG_DIR:-$CLAUDE_DIR/wf-logs/$TICKET/$(date +%Y%m%d-%H%M%S)}"
+say() { printf '%s %s\n' "$(date +%H:%M)" "$*"; }
+
+[ -f "$MAP" ] || { say "ERROR: no repo map at $MAP" >&2; exit 1; }
+if [ "$(jq -r 'has("docs")' "$MAP" 2>/dev/null)" != "true" ]; then
+  say "$TICKET: docs skipped (no docs block in $MAP)"; exit 4
+fi
+mkdir -p "$LOG_DIR" || exit 1
+
+COACH_REPO="$(jq -r '.docs.content_coach.repo // empty' "$MAP")"
+DIR=""
+[ -n "$COACH_REPO" ] && DIR="$(jq -r --arg r "$COACH_REPO" '.repos[] | select(.name == $r or .github == $r) | .path' "$MAP" | head -1)"
+[ -n "$DIR" ] && [ -e "$DIR/.git" ] || DIR="$(jq -r '.repos[].path' "$MAP" | while read -r p; do [ -e "$p/.git" ] && { echo "$p"; break; }; done)"
+[ -n "$DIR" ] || { say "ERROR: no checkout in $MAP exists on this machine" >&2; exit 1; }
+
+say "$TICKET: checking whether it needs a help article or enablement guide (in $DIR)"
+(cd "$DIR" && claude -p "/wf-docs $TICKET $FLAGS" --permission-mode "$MODE" --output-format json) \
+  </dev/null >"$LOG_DIR/docs.json" 2>"$LOG_DIR/docs.err"
+rc=$?
+if [ "$rc" -ne 0 ] || [ "$(jq -r '.is_error // false' "$LOG_DIR/docs.json" 2>/dev/null)" = "true" ]; then
+  say "$TICKET: docs session failed (exit $rc); see $LOG_DIR/docs.json" >&2; exit 2
+fi
+LINE="$(jq -r '.result // empty' "$LOG_DIR/docs.json" | tee "$LOG_DIR/docs.txt" | grep '^WF_DOCS ' | tail -1)"
+[ -n "$LINE" ] || { say "$TICKET: docs session printed no WF_DOCS line; see $LOG_DIR/docs.txt" >&2; exit 2; }
+say "$LINE"
