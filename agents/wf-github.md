@@ -150,6 +150,10 @@ GitHub retargets these on its own when the merged branch is deleted, so an empty
 
 Given: PR number. From the repo root, `gh pr ready <pr> --undo` (turns a ready PR back into a draft). Return `DRAFT: #<n>` (or `ERROR`).
 
+### MARK_READY `<pr-number>`
+
+Given: PR number. From the repo root, `gh pr ready <pr>` (turns a draft into a ready PR). Return `READY: #<n>` (or `ERROR`).
+
 ### PR_DIFF `<pr-url>`
 
 Read-only. Used to give a planner the contract an upstream PR (often in another repo) already built. From the repo root, `gh pr diff <pr-url>`. Return its output verbatim under `DIFF:`, preceded by `PR: <pr-url>`. On failure return `ERROR`.

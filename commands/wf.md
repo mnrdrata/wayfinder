@@ -130,7 +130,8 @@ Tickets that build on each other become a **chain**. A chain is built in order, 
 
   1. Run `~/.claude/bin/wf-dep-bump "<worktree>" <each package@version>`. It's the one registry call the workflow makes outside the sandbox: `--ignore-scripts`, so no project code runs. Don't run the package manager with network any other way.
   2. On `BUMPED`, commit the manifest and lockfile changes in the worktree: `chore(deps): use <package@version> from <upstream PR> [<identifier>]`.
-  3. On `BUMP_FAILED`, don't plan against the prerelease. The ticket goes on as if the package weren't published: the planner lists it under `UPSTREAM_BLOCKERS`, and the PR opens as a draft.
+  3. **Resuming a draft PR** that opened blocked on these packages: once they're `BUMPED` and the work verifies, the blocker is gone. Push, then `wf-github` `MARK_READY <pr>`, drop the `## Blocked on` section from the PR body, and continue with the CI stage like a ready PR.
+  4. On `BUMP_FAILED`, don't plan against the prerelease. The ticket goes on as if the package weren't published: the planner lists it under `UPSTREAM_BLOCKERS`, and the PR opens as a draft.
 
 - **Worktree-path discipline — pass this rule to every agent:** every file operation targets the absolute worktree path. `Bash` commands `cd "<path>"` first. `Read`/`Edit`/`Write`/`Grep`/`Glob` use absolute paths under `<path>`. Repo-relative paths resolve to `ROOT`, the main checkout, which is the WRONG tree.
 
