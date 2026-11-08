@@ -1,10 +1,14 @@
 #!/bin/bash
 # wf-dep-bump — point a worktree at a prerelease another repo just published.
 #
-# The one place /wf reaches a package registry: the build sandbox has no network, so it can't
-# resolve a version published minutes ago. This runs the repo's package manager with
-# --ignore-scripts, so no project code (install hooks, postinstall) runs. It changes only the
-# dependency entry, the lockfile and the installed packages.
+# The build sandbox has no network, so it can't resolve a version published minutes ago. This
+# splits the bump so no project code ever runs with network access or the user's credentials:
+#   1. Fetch (outside the sandbox): install just the named packages into an empty temp dir. It
+#      holds a package.json and .npmrc this script writes, so the repo's .pnpmfile.cjs, scripts
+#      and config don't load. --ignore-scripts keeps the packages' own install hooks from running.
+#      Tarballs and metadata land in the same store and cache the worktree uses.
+#   2. Bump (inside wf-exec, offline): the repo's package manager records the versions and
+#      installs from that cache. The repo's .pnpmfile.cjs runs here, sandboxed.
 #
 # Usage:  wf-dep-bump <worktree> <package>@<version> [<package>@<version>...]
 # Output: BUMPED <package>@<version> ...   (exit 0)  ·  BUMP_FAILED <reason>   (exit 2)
@@ -20,6 +24,8 @@ for spec in "$@"; do
   esac
 done
 cd "$WT" || { echo "BUMP_FAILED cannot-cd"; exit 2; }
+WF_EXEC="$(dirname "$0")/wf-exec"
+[ -x "$WF_EXEC" ] || { echo "BUMP_FAILED no-wf-exec:$WF_EXEC"; exit 2; }
 
 # Already pinned (a resumed run): nothing to do, and re-resolving could churn the lockfile.
 ALREADY=1
@@ -29,24 +35,68 @@ for spec in "$@"; do
 done
 [ "$ALREADY" -eq 1 ] && { echo "BUMPED $* (already pinned)"; exit 0; }
 
-# Use the pnpm the repo pins in package.json "packageManager" (e.g. pnpm@10.30.1). A newer global
-# pnpm can ignore the repo's settings and refuse its node_modules, as it did on drata/api.
-LOG="$(mktemp -t wf-dep-bump)"
-PM="$(jq -r '.packageManager // empty' package.json 2>/dev/null)"
-PNPM=(pnpm)
-case "$PM" in
-  pnpm@*)
-    if command -v corepack >/dev/null 2>&1; then PNPM=(corepack "${PM%%+*}")
-    else PNPM=(npx --yes "${PM%%+*}"); fi ;;
-esac
-
 if [ -f pnpm-lock.yaml ]; then
-  # Two steps: record the versions in package.json and the lockfile, then install from the
-  # lockfile. If the offline warm-up built node_modules with other settings, the install rebuilds
-  # it (confirm-modules-purge=false) instead of stopping to ask, since no one can answer here.
-  { "${PNPM[@]}" add "$@" --ignore-scripts --lockfile-only \
-      && "${PNPM[@]}" install --frozen-lockfile --ignore-scripts --config.confirm-modules-purge=false; } >"$LOG" 2>&1 \
-    || { echo "BUMP_FAILED pnpm with ${PNPM[*]}: $(tail -3 "$LOG" | tr '\n' ' ') (log: $LOG)"; exit 2; }
+  # Use the pnpm the repo pins in package.json "packageManager" (e.g. pnpm@10.30.1). A newer global
+  # pnpm can ignore the repo's settings and refuse its node_modules, as it did on drata/api.
+  PM="$(jq -r '.packageManager // empty' package.json 2>/dev/null)"
+  PKG=(pnpm)
+  case "$PM" in
+    pnpm@*)
+      if command -v corepack >/dev/null 2>&1; then PKG=(corepack "${PM%%+*}")
+      else PKG=(npx --yes "${PM%%+*}"); fi ;;
+  esac
+elif [ -f package-lock.json ]; then
+  PKG=(npm)
+else
+  echo "BUMP_FAILED no-pnpm-or-npm-lockfile"; exit 2
+fi
+
+LOG="$(mktemp -t wf-dep-bump)"
+FETCH="$(mktemp -d -t wf-dep-bump-fetch)"
+trap 'rm -rf "$FETCH"' EXIT
+fail() { echo "BUMP_FAILED $1: $(tail -3 "$LOG" | tr '\n' ' ') (log: $LOG)"; exit 2; }
+
+# Where the packages come from, read as data. Only registry and auth-token lines are copied from
+# the repo's .npmrc; a ${VAR} in a token line expands from this shell's environment.
+REG="$(cd "$WT" && "${PKG[@]}" config get registry 2>/dev/null)"
+case "$REG" in http*) ;; *) REG="https://registry.npmjs.org/" ;; esac
+# A token line whose ${VAR} is unset is left out (pnpm would drop the whole file); ~/.npmrc,
+# which still applies, may hold that token instead.
+{ [ -f .npmrc ] && grep -E '^[[:space:]]*(@[^:=]+:registry|//[^=]+:_authToken)[[:space:]]*=' .npmrc \
+    | while IFS= read -r line; do
+        ok=1
+        for v in $(printf '%s' "$line" | grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' | tr -d '${}'); do
+          [ -n "${!v:-}" ] || ok=0
+        done
+        [ "$ok" -eq 1 ] && printf '%s\n' "$line"
+      done
+  echo "registry=$REG"; } >"$FETCH/.npmrc"
+echo '{"name":"wf-dep-bump-fetch","private":true}' >"$FETCH/package.json"
+
+# Inside the sandbox ~/.npmrc is unreadable and secret env vars are stripped, and pnpm drops a
+# whole .npmrc when a ${VAR} in it is unset. Give each referenced var a dummy value: phase 2
+# never talks to a registry.
+PLACEHOLDERS=()
+if [ -f .npmrc ]; then
+  for v in $(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' .npmrc | tr -d '${}' | sort -u); do
+    PLACEHOLDERS+=("$v=wf-dep-bump-offline")
+  done
+fi
+OFFLINE=(env ${PLACEHOLDERS[@]+"${PLACEHOLDERS[@]}"} "${PKG[@]}")
+
+if [ "${PKG[0]}" = npm ]; then
+  (cd "$FETCH" && npm install "$@" --ignore-scripts --no-audit --no-fund) >"$LOG" 2>&1 || fail fetch
+  "$WF_EXEC" "${OFFLINE[@]}" install "$@" --ignore-scripts --save-exact --offline --registry="$REG" >"$LOG" 2>&1 \
+    || fail npm-install
+else
+  STORE="$("${PKG[@]}" store path 2>/dev/null)"
+  [ -n "$STORE" ] || { echo "BUMP_FAILED no-pnpm-store"; exit 2; }
+  (cd "$FETCH" && "${PKG[@]}" add "$@" --ignore-scripts --ignore-pnpmfile --store-dir "$STORE") >"$LOG" 2>&1 || fail fetch
+  # Record the versions in package.json and the lockfile, then install from the lockfile. If the
+  # offline warm-up built node_modules with other settings, the install rebuilds it
+  # (confirm-modules-purge=false) instead of stopping to ask, since no one can answer here.
+  "$WF_EXEC" "${OFFLINE[@]}" add "$@" --ignore-scripts --lockfile-only --offline --config.registry="$REG" >"$LOG" 2>&1 \
+    || fail "pnpm add with ${PKG[*]}"
   # pnpm can re-resolve unrelated entries (it moved another package's @drata/enums on drata/api).
   # Only lines naming a bumped package, or its new integrity/tarball, may change.
   PAT="$(printf '%s\n' "$@" | sed -E 's/@[^@]+$//' | sed 's/[.[\*^$/]/\\&/g' | paste -sd'|' -)"
@@ -55,10 +105,8 @@ if [ -f pnpm-lock.yaml ]; then
     git checkout -- package.json pnpm-lock.yaml 2>/dev/null
     echo "BUMP_FAILED lockfile-churn: pnpm changed unrelated lockfile entries, e.g. $(printf '%s' "$OTHER" | head -1 | tr -s ' ')"; exit 2
   fi
-elif [ -f package-lock.json ]; then
-  npm install "$@" --ignore-scripts --save-exact >"$LOG" 2>&1 || { echo "BUMP_FAILED npm-install: $(tail -3 "$LOG" | tr '\n' ' ') (log: $LOG)"; exit 2; }
-else
-  echo "BUMP_FAILED no-pnpm-or-npm-lockfile"; exit 2
+  "$WF_EXEC" "${OFFLINE[@]}" install --frozen-lockfile --offline --ignore-scripts --config.confirm-modules-purge=false \
+    --config.registry="$REG" >"$LOG" 2>&1 || fail "pnpm install with ${PKG[*]}"
 fi
 rm -f "$LOG"
 echo "BUMPED $*"
