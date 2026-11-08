@@ -44,7 +44,7 @@ When asked to change "the workflow," "an agent," or "a command," you are editing
 
 **Reasoning agents** — `wf-planner` (opus: reads the repo's own `CLAUDE.md`/`AGENTS.md` + code, drafts the definition of done, decides open questions, emits plan + forward Context Pack), `wf-executor` (sonnet: implements plan with atomic commits; also fixes failing CI checks), `wf-reviewer` (opus: reviews diff coverage-first — only precisely-routed BLOCKING items drive the fix loop; flags auth/permissions/customer-data changes as `HUMAN_REVIEW`), `wf-verifier` (sonnet: lint/type/tests scoped to changed files, proves the definition of done; whole-repo suites are `LEFT_TO_CI`), `wf-spec-builder` (opus, optional + interactive: ticket → spec via `/wf-spec`).
 
-**Boundary agents** — each owns *all* I/O to one external system so other agents stay free of API plumbing: `wf-linear` (haiku, all Linear MCP calls), `wf-github` (haiku, all `gh` CLI calls, including watching CI checks and fetching failure logs).
+**Boundary agents** — each owns *all* I/O to one external system so other agents stay free of API plumbing: `wf-linear` (haiku, all Linear MCP calls), `wf-github` (haiku, all `gh` CLI calls, including watching CI checks, fetching failure logs, and reading and answering review findings).
 
 **Orchestration agent** — `wf-runner` (sonnet: drives one ticket's execute → review+verify → ≤2 fix rounds inner loop in its worktree; `/wf`'s single canonical inner loop; never touches Linear/GitHub, never asks the user).
 
@@ -54,7 +54,7 @@ Model tiering is deliberate: Opus for decisions/architecture/bug-catching, Sonne
 
 ## The commands (`~/.claude/commands/`)
 
-- `/wf <ids>` — hands-off, ticket → PR with green CI. Each ticket in its own git worktree; planned concurrently, executed ≤3 at a time (file-overlapping tickets serialized). Never asks mid-run: open decisions become recorded defaults (PR body + Linear comment); a ticket with no workable goal gets its questions posted to Linear and is parked in *Needs Answers* (re-running `/wf <id>` reads the answers). After PRs open, a **CI stage** watches checks and runs ≤3 executor fix rounds per PR; green → *In Review*, still red → draft PR + comment. No per-repo setup: context comes from the repo's own instructions.
+- `/wf <ids>` — hands-off, ticket → PR with green CI. Each ticket in its own git worktree; planned concurrently, executed ≤3 at a time (file-overlapping tickets serialized). Never asks mid-run: open decisions become recorded defaults (PR body + Linear comment); a ticket with no workable goal gets its questions posted to Linear and is parked in *Needs Answers* (re-running `/wf <id>` reads the answers). After PRs open, a **CI stage** watches checks and runs ≤3 executor fix rounds per PR; green → a **review stage** reads every open finding (review bots, security scanners, check annotations, humans), fixes or answers each one, and only then sets *In Review*; still red → draft PR + comment. No per-repo setup: context comes from the repo's own instructions.
 - `/wf-spec <ids>` — optional, interactive; refine tickets into specs posted as a marked Linear **comment** on each ticket (description becomes a short Why/What/Success-criteria brief). `/wf` uses the spec comment when present.
 - `/wf-quick <id> <instruction>` — small follow-up change on an existing ticket worktree; pushes so the open PR updates.
 - `/wf-eval [case ...]` — the regression gate (see below).

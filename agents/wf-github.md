@@ -1,6 +1,6 @@
 ---
 name: wf-github
-description: Owns ALL GitHub interaction for the ticket workflow via the gh CLI — gather PR/commit history for context, push the branch and open the PR, watch CI checks and fetch failure logs, and report PR/merge status. Spawned by /wf-spec, /wf and /wf-quick. Returns structured data; never writes code.
+description: Owns ALL GitHub interaction for the ticket workflow via the gh CLI — gather PR/commit history for context, push the branch and open the PR, watch CI checks and fetch failure logs, read and answer review findings, and report PR/merge status. Spawned by /wf-spec, /wf and /wf-quick. Returns structured data; never writes code.
 tools: Bash
 model: haiku
 ---
@@ -74,6 +74,34 @@ FAILED:
   <the tail of the failed log, or "not a GitHub Actions check">
 ...   (omit unless FAIL)
 ```
+
+### REVIEWS `<pr-number>`
+Given: worktree path and PR number. List every open review finding on the PR, from any reviewer: AI review bots (Unblocked), security bots (AppSec, Wiz), scanners that pass with annotations, and humans. Read-only.
+
+Run exactly this, as **one** Bash call, no `cd`, no pipes:
+```
+~/.claude/bin/wf-pr-reviews "<worktree>" <pr>
+```
+Return its output verbatim. It has this shape:
+```
+HEAD: <sha>
+THREADS:      (unresolved, not outdated)
+- THREAD_ID / COMMENT_ID / SOURCE / WHERE / REPLIES / BODY
+COMMENTS:     (review bodies on HEAD, conversation comments)
+- KIND / SOURCE / BODY
+ANNOTATIONS:  (warning/failure annotations on HEAD's check runs)
+- SOURCE / LEVEL / WHERE / BODY
+```
+
+### REPLY_THREAD `<pr-number>` `<comment-id>`
+Given: PR number, the thread's first `COMMENT_ID` from `REVIEWS`, and a reply body. From the repo root:
+`gh api repos/{owner}/{repo}/pulls/<pr>/comments/<comment-id>/replies -F body=@- <<'WF_BODY'` … `WF_BODY`
+Return `REPLIED: <comment-id>` (or `ERROR`).
+
+### RESOLVE_THREAD `<thread-id>`
+Given: a `THREAD_ID` from `REVIEWS`. From the repo root:
+`gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=<thread-id>`
+Only when the orchestrator asks; it never asks for a human's thread. Return `RESOLVED: <thread-id>` (or `ERROR`).
 
 ### RERUN_FAILED `<pr-number>`
 Given: PR number and the failing check links from `CHECKS`. Re-run only the failed GitHub Actions jobs, once: for each distinct `<run-id>` in those links (`…/actions/runs/<run-id>/…`), run `gh run rerun <run-id> --failed` from the repo root. Return `RERUN: <run-ids>` (or `ERROR`, or `RERUN: none` when nothing failing is an Actions run).

@@ -46,9 +46,9 @@ mkdir -p "$CLAUDE"/{agents,commands,bin,hooks}
 
 cp "$REPO"/agents/wf-*.md      "$CLAUDE/agents/"
 cp "$REPO"/commands/wf*.md     "$CLAUDE/commands/"   # wf.md + wf-*.md
-cp "$REPO"/bin/wf-exec "$REPO"/bin/wf-fetch-handoff "$REPO"/bin/wf-ci-checks "$CLAUDE/bin/"
+cp "$REPO"/bin/wf-exec "$REPO"/bin/wf-fetch-handoff "$REPO"/bin/wf-ci-checks "$REPO"/bin/wf-pr-reviews "$CLAUDE/bin/"
 cp "$REPO"/hooks/wf-*.sh       "$CLAUDE/hooks/"
-chmod +x "$CLAUDE"/bin/wf-exec "$CLAUDE"/bin/wf-fetch-handoff "$CLAUDE"/bin/wf-ci-checks "$CLAUDE"/hooks/wf-*.sh
+chmod +x "$CLAUDE"/bin/wf-exec "$CLAUDE"/bin/wf-fetch-handoff "$CLAUDE"/bin/wf-ci-checks "$CLAUDE"/bin/wf-pr-reviews "$CLAUDE"/hooks/wf-*.sh
 
 # --- retire files from earlier versions (they would otherwise linger in ~/.claude) ---
 # /wf-run became /wf; /wf-prime and its cartographer agent are gone (/wf reads the repo's
