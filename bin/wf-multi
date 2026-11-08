@@ -42,8 +42,10 @@ mkdir -p "$LOG_DIR" || die "can't create $LOG_DIR"
 # Run one headless session in <dir> and print its final text. Full JSON goes to <log>.json.
 run_session() {
   local dir="$1" prompt="$2" log="$3"
+  # </dev/null: `claude -p` appends stdin to the prompt, and inside the build loop stdin is
+  # the list of units, so without it the first session swallows every later unit.
   (cd "$dir" && claude -p "$prompt" --permission-mode "$MODE" --output-format json) \
-    >"$log.json" 2>"$log.err"
+    </dev/null >"$log.json" 2>"$log.err"
   local rc=$?
   if [ "$rc" -ne 0 ] || [ "$(jq -r '.is_error // false' "$log.json" 2>/dev/null)" = "true" ]; then
     say "session failed in $dir (exit $rc); see $log.json and $log.err" >&2
@@ -71,7 +73,10 @@ printf '%s\n' "$UNITS" | awk '{ print "  " $1 " [" $2 "] in " $3 }'
 
 STATUS=0
 REMAINING="$UNITS"
-while read -r ID REPO DIR; do
+TOTAL="$(printf '%s\n' "$UNITS" | awk 'NF' | wc -l | tr -d ' ')"
+BUILT=0
+# Read the units on fd 3 so nothing in the loop body can consume them from stdin.
+while read -r ID REPO DIR <&3; do
   [ -n "$ID" ] || continue
   REMAINING="$(printf '%s\n' "$REMAINING" | sed '1d')"
   say "$ID [$REPO]: building in $DIR"
@@ -81,13 +86,17 @@ while read -r ID REPO DIR; do
   PR="${RESULT#* }"
   case "$STATE" in
     finished|skipped)
-      say "$ID [$REPO]: $STATE, ${PR:-no PR}" ;;
+      say "$ID [$REPO]: $STATE, ${PR:-no PR}"; BUILT=$((BUILT + 1)) ;;
     "")
       say "$ID [$REPO]: no WF_RESULT line; see $LOG_DIR/$ID.txt"; STATUS=2; break ;;
     *)
       say "$ID [$REPO]: $STATE, ${PR:-no PR}; stopping the chain"; STATUS=2; break ;;
   esac
-done <<<"$UNITS"
+done 3<<<"$UNITS"
+
+if [ "$STATUS" -eq 0 ] && [ "$BUILT" -ne "$TOTAL" ]; then
+  say "$TICKET: only $BUILT of $TOTAL sub-issues ran; stopping"; STATUS=2
+fi
 
 if [ "$STATUS" -ne 0 ] && [ -n "$REMAINING" ]; then
   say "$TICKET: not started:"
