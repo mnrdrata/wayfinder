@@ -1,0 +1,46 @@
+#!/bin/bash
+# wf-pr-reviews — list every open review finding on a PR, from any reviewer (bots and humans):
+#   - unresolved, non-outdated review threads (inline comments)
+#   - review bodies and PR conversation comments on the current head, from bots
+#   - warning/failure annotations on the head commit's check runs (scanners that pass with findings)
+# Read-only. One plain command so a single permission rule covers it (no inline loops).
+# Usage: wf-pr-reviews <worktree> <pr-number>
+set -uo pipefail
+WT="${1:?usage: wf-pr-reviews <worktree> <pr-number>}"
+PR="${2:?usage: wf-pr-reviews <worktree> <pr-number>}"
+cd "$WT" || { echo "ERROR: no such worktree: $WT"; exit 1; }
+
+repo=$(gh repo view --json nameWithOwner -q .nameWithOwner) || { echo "ERROR: gh repo view failed"; exit 1; }
+owner=${repo%/*}; name=${repo#*/}
+head=$(gh pr view "$PR" --json headRefOid -q .headRefOid) || { echo "ERROR: gh pr view failed"; exit 1; }
+echo "HEAD: $head"
+
+# 1. Review threads (first 100 threads, first comment of each is the finding).
+threads=$(gh api graphql -F owner="$owner" -F name="$name" -F pr="$PR" -f query='
+query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){
+  reviewThreads(first:100){nodes{id isResolved isOutdated path line
+    comments(first:20){nodes{databaseId author{login} body commit{oid}}}}}}}}') || threads='{}'
+
+echo "THREADS:"
+jq -r '.data.repository.pullRequest.reviewThreads.nodes[]?
+  | select(.isResolved==false and .isOutdated==false)
+  | .comments.nodes as $c
+  | "- THREAD_ID: \(.id)\n  COMMENT_ID: \($c[0].databaseId)\n  SOURCE: \($c[0].author.login // "unknown")\n  WHERE: \(.path):\(.line // "file")\n  REPLIES: \(($c | length) - 1)\n  BODY: |\n\($c[0].body | split("\n") | map("    " + .) | join("\n"))"' <<<"$threads"
+
+# 2. Bot review bodies and conversation comments (humans' general comments are listed too, flagged).
+echo "COMMENTS:"
+gh api "repos/$repo/pulls/$PR/reviews" --paginate 2>/dev/null |
+  jq -r --arg head "$head" '.[] | select(.commit_id==$head and (.body|length)>0)
+    | "- KIND: review\n  SOURCE: \(.user.login)\n  STATE: \(.state)\n  BODY: |\n\(.body | split("\n") | map("    " + .) | join("\n"))"'
+gh api "repos/$repo/issues/$PR/comments" --paginate 2>/dev/null |
+  jq -r '.[] | select((.user.login|test("linear|codecov|socket-security|github-actions")|not))
+    | "- KIND: comment\n  ID: \(.id)\n  SOURCE: \(.user.login)\n  BODY: |\n\(.body | split("\n") | map("    " + .) | join("\n"))"'
+
+# 3. Check-run annotations on the head commit (Wiz, SonarCloud, AppSec, any scanner).
+echo "ANNOTATIONS:"
+gh api "repos/$repo/commits/$head/check-runs" --paginate -q '.check_runs[] | select(.output.annotations_count > 0) | "\(.id)\t\(.name)"' 2>/dev/null |
+while IFS=$'\t' read -r id cname; do
+  gh api "repos/$repo/check-runs/$id/annotations" 2>/dev/null |
+    jq -r --arg c "$cname" '.[] | select(.annotation_level=="warning" or .annotation_level=="failure")
+      | "- SOURCE: \($c)\n  LEVEL: \(.annotation_level)\n  WHERE: \(.path):\(.start_line)\n  BODY: \(.title // "") \(.message | gsub("\n"; " "))"'
+done

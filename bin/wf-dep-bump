@@ -1,0 +1,64 @@
+#!/bin/bash
+# wf-dep-bump — point a worktree at a prerelease another repo just published.
+#
+# The one place /wf reaches a package registry: the build sandbox has no network, so it can't
+# resolve a version published minutes ago. This runs the repo's package manager with
+# --ignore-scripts, so no project code (install hooks, postinstall) runs. It changes only the
+# dependency entry, the lockfile and the installed packages.
+#
+# Usage:  wf-dep-bump <worktree> <package>@<version> [<package>@<version>...]
+# Output: BUMPED <package>@<version> ...   (exit 0)  ·  BUMP_FAILED <reason>   (exit 2)
+set -uo pipefail
+
+[ "$#" -ge 2 ] || { echo "usage: wf-dep-bump <worktree> <package>@<version> [...]" >&2; exit 1; }
+WT="$1"; shift
+[ -d "$WT" ] || { echo "BUMP_FAILED no-such-worktree"; exit 2; }
+for spec in "$@"; do
+  case "$spec" in
+    @*/*@[0-9]*) ;;
+    *) echo "BUMP_FAILED bad-spec:$spec"; exit 2 ;;
+  esac
+done
+cd "$WT" || { echo "BUMP_FAILED cannot-cd"; exit 2; }
+
+# Already pinned (a resumed run): nothing to do, and re-resolving could churn the lockfile.
+ALREADY=1
+for spec in "$@"; do
+  name="${spec%@*}"; ver="${spec##*@}"
+  [ "$(jq -r --arg n "$name" '(.dependencies // {})[$n] // (.devDependencies // {})[$n] // empty' package.json 2>/dev/null)" = "$ver" ] || ALREADY=0
+done
+[ "$ALREADY" -eq 1 ] && { echo "BUMPED $* (already pinned)"; exit 0; }
+
+# Use the pnpm the repo pins in package.json "packageManager" (e.g. pnpm@10.30.1). A newer global
+# pnpm can ignore the repo's settings and refuse its node_modules, as it did on drata/api.
+LOG="$(mktemp -t wf-dep-bump)"
+PM="$(jq -r '.packageManager // empty' package.json 2>/dev/null)"
+PNPM=(pnpm)
+case "$PM" in
+  pnpm@*)
+    if command -v corepack >/dev/null 2>&1; then PNPM=(corepack "${PM%%+*}")
+    else PNPM=(npx --yes "${PM%%+*}"); fi ;;
+esac
+
+if [ -f pnpm-lock.yaml ]; then
+  # Two steps: record the versions in package.json and the lockfile, then install from the
+  # lockfile. If the offline warm-up built node_modules with other settings, the install rebuilds
+  # it (confirm-modules-purge=false) instead of stopping to ask, since no one can answer here.
+  { "${PNPM[@]}" add "$@" --ignore-scripts --lockfile-only \
+      && "${PNPM[@]}" install --frozen-lockfile --ignore-scripts --config.confirm-modules-purge=false; } >"$LOG" 2>&1 \
+    || { echo "BUMP_FAILED pnpm with ${PNPM[*]}: $(tail -3 "$LOG" | tr '\n' ' ') (log: $LOG)"; exit 2; }
+  # pnpm can re-resolve unrelated entries (it moved another package's @drata/enums on drata/api).
+  # Only lines naming a bumped package, or its new integrity/tarball, may change.
+  PAT="$(printf '%s\n' "$@" | sed -E 's/@[^@]+$//' | sed 's/[.[\*^$/]/\\&/g' | paste -sd'|' -)"
+  OTHER="$(git diff -U0 pnpm-lock.yaml | grep -E '^[-+] ' | grep -vE "$PAT|specifier:|version:|resolution:" | head -3)"
+  if [ -n "$OTHER" ]; then
+    git checkout -- package.json pnpm-lock.yaml 2>/dev/null
+    echo "BUMP_FAILED lockfile-churn: pnpm changed unrelated lockfile entries, e.g. $(printf '%s' "$OTHER" | head -1 | tr -s ' ')"; exit 2
+  fi
+elif [ -f package-lock.json ]; then
+  npm install "$@" --ignore-scripts --save-exact >"$LOG" 2>&1 || { echo "BUMP_FAILED npm-install: $(tail -3 "$LOG" | tr '\n' ' ') (log: $LOG)"; exit 2; }
+else
+  echo "BUMP_FAILED no-pnpm-or-npm-lockfile"; exit 2
+fi
+rm -f "$LOG"
+echo "BUMPED $*"

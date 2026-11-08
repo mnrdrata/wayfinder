@@ -1,0 +1,50 @@
+#!/bin/bash
+# wf-run-ac — build a Linear ticket with wf-run, then prove its acceptance criteria.
+#
+# 1. Checks first that the evidence session can start (asks you to sign in to sfk if needed),
+#    so a long build doesn't end in a sign-in prompt.
+# 2. Runs wf-run: one /wf session per repo, PRs opened, CI green.
+# 3. When every repo finished, runs wf-evidence with those PRs. It deploys them together,
+#    proves each acceptance criterion, and posts one complete comment on the ticket.
+# Use wf-run on its own to build without the evidence step.
+#
+# Usage:  wf-run-ac <ticket-id>
+# Env:    everything wf-run and wf-evidence read (WF_PERMISSION_MODE, WF_EVIDENCE_MODE, ...)
+# Exit:   0 built and every criterion passed · 1 setup error · 2 the build didn't finish,
+#         or a criterion failed or wasn't checked · 3 a repo isn't in wf-repos.json
+set -uo pipefail
+
+TICKET="${1:-}"
+if [ -z "$TICKET" ] || [ "$#" -ne 1 ]; then
+  echo "usage: wf-run-ac <ticket-id>" >&2
+  exit 1
+fi
+
+BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLAUDE_DIR="${CLAUDE_HOME:-$HOME/.claude}"
+say() { printf '%s %s\n' "$(date +%H:%M)" "$*"; }
+
+MODE="$("$BIN/wf-evidence" --preflight)" || exit 1
+say "$TICKET: acceptance evidence will run as: $MODE"
+
+export WF_LOG_DIR="$CLAUDE_DIR/wf-logs/$TICKET/$(date +%Y%m%d-%H%M%S)"
+"$BIN/wf-run" "$TICKET"
+RUN_STATUS=$?
+if [ "$RUN_STATUS" -ne 0 ]; then
+  say "$TICKET: the build didn't finish, so there's nothing to prove yet. Fix what wf-run reported, then re-run wf-run-ac."
+  exit "$RUN_STATUS"
+fi
+
+PRS=()
+while IFS=$'\t' read -r _ _ STATE PR; do
+  [ "$PR" != "none" ] && [ -n "$PR" ] && PRS+=("$PR")
+done < <(cat "$WF_LOG_DIR/results.tsv" 2>/dev/null)
+
+WF_EVIDENCE_MODE="$MODE" "$BIN/wf-evidence" "$TICKET" ${PRS[@]+"${PRS[@]}"}
+EVIDENCE_STATUS=$?
+case "$EVIDENCE_STATUS" in
+  0) say "$TICKET: built, and every acceptance criterion passed. Review and merge happen on GitHub." ;;
+  4) say "$TICKET: built; acceptance evidence skipped." ; exit 0 ;;
+  *) say "$TICKET: built, but the acceptance evidence isn't all green; see the comment on $TICKET." ;;
+esac
+exit "$EVIDENCE_STATUS"
