@@ -1,5 +1,5 @@
 ---
-description: Take one or more Linear tickets from ticket to a PR with green CI, hands-off, on this machine. Each ticket gets its own git worktree; agents plan, implement, verify and review it, open the PR, then fix CI and review findings until it is green. A ticket that spans repos (e.g. api + multiverse) is split into one sub-issue per repo; each /wf session builds only its own repo's sub-issues, and the wf-multi script runs one session per repo in order. Never asks questions mid-run, never merges, never sets Done.
+description: Take one or more Linear tickets from ticket to a PR with green CI, hands-off, on this machine. Each ticket gets its own git worktree; agents plan, implement, verify and review it, open the PR, then fix CI and review findings until it is green. A ticket that spans repos (e.g. api + multiverse) is split into one sub-issue per repo; each /wf session builds only its own repo's sub-issues, and the wf-run script runs one session per repo in order. Never asks questions mid-run, never merges, never sets Done.
 argument-hint: [--split-only] <ticket-id> [ticket-id...]
 allowed-tools: Task, Bash, Read, Edit, Skill
 ---
@@ -33,7 +33,7 @@ Drive each ticket in `$ARGUMENTS` from Linear to a GitHub PR that is ready for a
 - `ROOT` = `git rev-parse --show-toplevel`. Worktrees live in `ROOT/.worktrees/`. If `.worktrees/` isn't ignored (`git check-ignore -q .worktrees`), add `.worktrees/` to `ROOT/.git/info/exclude` (local only, no diff).
 - **Repo map.** Read `~/.claude/wf-repos.json` into `REPOS` (name, github, local path, aliases; listed upstream-first). `SESSION_REPO` = the entry whose `path` is `ROOT` or whose `github` matches the origin URL. If the file is missing or no entry matches, splitting is off (step 1a) and every ticket builds here, as before.
 
-**This session builds only its own repo.** A Claude Code session loads one repo's `CLAUDE.md`, project agents, hooks and skills: the ones where it started. So a ticket in another repo is never built from here. Step 1a names the session that should build it, and `~/.claude/bin/wf-multi` runs those sessions in order.
+**This session builds only its own repo.** A Claude Code session loads one repo's `CLAUDE.md`, project agents, hooks and skills: the ones where it started. So a ticket in another repo is never built from here. Step 1a names the session that should build it, and `~/.claude/bin/wf-run` runs those sessions in order.
 
 ## `--split-only`
 
@@ -44,7 +44,7 @@ WF_SPLIT <ticket>
 UNIT <identifier> <repo> <checkout path> <needs>
 ```
 
-One `UNIT` line per sub-issue in build order, or one line with the ticket itself when it needs only one repo. `<needs>` is the comma-separated identifiers of the sibling sub-issues it is blocked by, or `-` when it is independent. A unit whose repo isn't in `REPOS` prints `UNIT <identifier> <github repo> missing -`. `wf-multi` reads this block, and builds independent units at the same time.
+One `UNIT` line per sub-issue in build order, or one line with the ticket itself when it needs only one repo. `<needs>` is the comma-separated identifiers of the sibling sub-issues it is blocked by, or `-` when it is independent. A unit whose repo isn't in `REPOS` prints `UNIT <identifier> <github repo> missing -`. `wf-run` reads this block, and builds independent units at the same time.
 
 Post one status line as each ticket moves stage (fetched → planned → executing → code review → PR open → CI green) so the user can follow a long batch. Start each line with the time from `date +%H:%M`. Keep each ticket's stage times: the final report shows how long each stage took.
 
@@ -54,7 +54,7 @@ For each ticket, spawn `wf-linear` `FETCH <id>` **and** `READ_SPEC <id>` in one 
 
 - **Resolve the spec.** `SPEC` = the `READ_SPEC` body when `SPEC_STATUS: FOUND` (written by the optional `/wf-spec`). Otherwise use the `FETCH` description. A ticket with no acceptance criteria is fine: the planner drafts the definition of done.
 - **Skip finished tickets.** If `STATE_TYPE` is `completed`, `canceled` or `duplicate` (e.g. Merged), report `already <STATE>` and drop the ticket from this run.
-- **Skip tickets that already have their PR.** If `COMMENTS` include one whose first line starts with `🤖 /wf opened <PR_URL> (ready for review`, and `wf-github` `PR_STATUS <PR_URL>` says it is open, report `already has <PR_URL>` and drop the ticket. Further changes to it go through `/wf-quick`. This is what makes a `wf-multi` re-run cheap.
+- **Skip tickets that already have their PR.** If `COMMENTS` include one whose first line starts with `🤖 /wf opened <PR_URL> (ready for review`, and `wf-github` `PR_STATUS <PR_URL>` says it is open, report `already has <PR_URL>` and drop the ticket. Further changes to it go through `/wf-quick`. This is what makes a `wf-run` re-run cheap.
 - **Resume a parked ticket.** Detect it by its comments, not its state (most teams have no _Needs Answers_ state). If `FETCH`'s `COMMENTS` include one whose first line starts with `🤖 Spec questions`, spawn `wf-linear` `READ_ANSWERS <id>`:
   - `AWAITING` → report `still awaiting answers` and drop the ticket from this run.
   - `ANSWERED` → build an `ANSWERS:` section. Map the reply onto the posted questions: `all recommended` means every ✅ option, `1: B` means question 1 option B, matching text means that option, and other free text passes through verbatim. An unanswered question takes its ✅ option. Note each default in the final report.
@@ -84,7 +84,7 @@ Every ticket runs in exactly one repo. Settle that for each fetched ticket now, 
 
 - **`SUB_ISSUES: unknown`** (the backend couldn't list children) → never create sub-issues. Build the ticket here, and note `couldn't check for sub-issues, not split` in the report.
 - **Idempotency.** `CREATE_SUB_ISSUE` is only reached when `SUB_ISSUES` is `none`, so a re-run never splits twice. It finds the sub-issues from the first run and resumes them.
-- **Build only this repo's units.** Keep the tickets whose repo is `SESSION_REPO` (and tickets that were never split, which build here as before). Drop the rest from this run and report each as `<identifier> [<repo>] — build from <checkout path>: /wf <identifier>`, or point at `wf-multi <umbrella>`, which runs them all in order.
+- **Build only this repo's units.** Keep the tickets whose repo is `SESSION_REPO` (and tickets that were never split, which build here as before). Drop the rest from this run and report each as `<identifier> [<repo>] — build from <checkout path>: /wf <identifier>`, or point at `wf-run <umbrella>`, which runs them all in order.
 - **Umbrella bookkeeping.** Step 6 moves the umbrella to In Progress. When a sub-issue is set In Review, check the umbrella (see the review stage); it moves to In Review once every sub-issue is.
 
 A sub-issue's blocked-by link to a sub-issue in another repo is an **upstream PR** in step 1b, not a chain.
@@ -330,7 +330,7 @@ Print a table: identifier → PR URL → CI (`green` / `none` / `running` / `red
 
 Remind the user that review and merge happen on GitHub, by a human. When a PR is merged, they tell you ("ENG-123 is merged") and you run _On merge_.
 
-**End with one machine-readable line per ticket**, after everything else, for scripts such as `wf-multi`:
+**End with one machine-readable line per ticket**, after everything else, for scripts such as `wf-run`:
 
 ```
 WF_RESULT <identifier> <finished|needs-human|parked|blocked|waiting|skipped|elsewhere> <PR_URL or none>
@@ -367,7 +367,7 @@ Never clean up a worktree whose PR has not been confirmed merged.
 
 - **Stacking needs Linear links.** Tickets stack only when they're linked with "blocked by" and run in the same `/wf`. Without the links, each ticket branches from `origin/<BASE>` and can't use another's unmerged work.
 - **Chains are serial.** A chain's tickets never run in parallel, and the chain stops at the first ticket that doesn't finish.
-- **One repo per session.** A session builds only `SESSION_REPO`'s tickets, because only that repo's `CLAUDE.md`, project agents, hooks and skills are loaded. A ticket spanning repos is split here, and `wf-multi` (or you) runs `/wf` once per repo, in order.
+- **One repo per session.** A session builds only `SESSION_REPO`'s tickets, because only that repo's `CLAUDE.md`, project agents, hooks and skills are loaded. A ticket spanning repos is split here, and `wf-run` (or you) runs `/wf` once per repo, in order.
 - **Splitting covers only repos in `~/.claude/wf-repos.json`.** A dependency on a repo that isn't listed, or on a **package release** (e.g. a new `@drata/enums` version), is still an `UPSTREAM_BLOCKERS` draft. A later repo builds against an unmerged PR, but not against an unpublished package.
 - **The shared branch name carries the umbrella's key.** Linear's GitHub integration may link every repo's PR to the umbrella as well as to its sub-issue, and move the umbrella when a PR merges. The sub-issues' own states stay correct, because each PR's title and body name its sub-issue.
 - **A later repo may not be able to check its build locally.** A frontend that generates its API client from the api's swagger (multiverse does) fetches it over the network, which the sandbox blocks. Its CI does it, and finds the api PR through the shared branch name. So the frontend's local checks may leave typing to CI.

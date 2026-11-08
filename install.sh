@@ -46,14 +46,14 @@ mkdir -p "$CLAUDE"/{agents,commands,bin,hooks}
 
 cp "$REPO"/agents/wf-*.md      "$CLAUDE/agents/"
 cp "$REPO"/commands/wf*.md     "$CLAUDE/commands/"   # wf.md + wf-*.md
-cp "$REPO"/bin/wf-exec "$REPO"/bin/wf-fetch-handoff "$REPO"/bin/wf-ci-checks "$REPO"/bin/wf-pr-reviews "$REPO"/bin/wf-multi "$CLAUDE/bin/"
+cp "$REPO"/bin/wf-exec "$REPO"/bin/wf-fetch-handoff "$REPO"/bin/wf-ci-checks "$REPO"/bin/wf-pr-reviews "$REPO"/bin/wf-run "$REPO"/bin/wf-run-ac "$REPO"/bin/wf-evidence "$CLAUDE/bin/"
 cp "$REPO"/hooks/wf-*.sh       "$CLAUDE/hooks/"
-chmod +x "$CLAUDE"/bin/wf-exec "$CLAUDE"/bin/wf-fetch-handoff "$CLAUDE"/bin/wf-ci-checks "$CLAUDE"/bin/wf-pr-reviews "$CLAUDE"/bin/wf-multi "$CLAUDE"/hooks/wf-*.sh
+chmod +x "$CLAUDE"/bin/wf-exec "$CLAUDE"/bin/wf-fetch-handoff "$CLAUDE"/bin/wf-ci-checks "$CLAUDE"/bin/wf-pr-reviews "$CLAUDE"/bin/wf-run "$CLAUDE"/bin/wf-run-ac "$CLAUDE"/bin/wf-evidence "$CLAUDE"/hooks/wf-*.sh
 
 # --- retire files from earlier versions (they would otherwise linger in ~/.claude) ---
 # /wf-run became /wf; /wf-prime and its cartographer agent are gone (/wf reads the repo's
 # own CLAUDE.md/AGENTS.md instead of a generated CONTEXT.md).
-rm -f "$CLAUDE/commands/wf-run.md" "$CLAUDE/commands/wf-prime.md" "$CLAUDE/agents/wf-cartographer.md"
+rm -f "$CLAUDE/commands/wf-run.md" "$CLAUDE/commands/wf-prime.md" "$CLAUDE/agents/wf-cartographer.md" "$CLAUDE/bin/wf-multi"
 
 # --- generate the sandbox profile for this machine -----------------------------
 # The seatbelt profile needs literal absolute paths; fill in this machine's dirs —
@@ -66,6 +66,10 @@ sed -e "s#__CLAUDE__#$CLAUDE#g" -e "s#__HOME__#$HOME#g" "$REPO/ticket-workflow-s
 # reports SPEC_GAPS. It holds ticket-derived text, so it is DATA, never an agent prompt —
 # seed it empty, once, and leave any existing log (a user's accumulated history) untouched.
 [ -f "$CLAUDE/wf-spec-gaps.md" ] || cp "$REPO/wf-spec-gaps.md" "$CLAUDE/wf-spec-gaps.md"
+
+# --- acceptance-evidence prompt (wayfinder-owned; refreshed on every install) ---------
+# wf-evidence fills it in for each ticket. Edit it in this repo, not in ~/.claude.
+cp "$REPO/wf-evidence-prompt.md" "$CLAUDE/wf-evidence-prompt.md"
 
 # --- repo map for multi-repo tickets (machine-specific; never clobber) ----------
 # /wf splits a ticket that spans repos into one sub-issue per repo and runs each in the

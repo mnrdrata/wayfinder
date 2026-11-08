@@ -1,0 +1,160 @@
+#!/bin/bash
+# wf-evidence — prove a ticket's acceptance criteria, and post one complete comment on it.
+#
+# Starts an agent session with the prompt in ~/.claude/wf-evidence-prompt.md. The session
+# deploys the ticket's PRs together, collects evidence for each acceptance criterion
+# (screenshots and animations for UI, request/response tables for APIs), posts one comment
+# on the ticket, and writes a RESULT line to a file this script waits for.
+#
+# Two ways to run the session:
+#   sfk     from a laptop: a new Starfolk session on the evidence environment (default off a box)
+#   direct  already on a Starfolk box: a headless `claude -p` in the evidence repo (default on a box)
+#
+# Usage:  wf-evidence <ticket> [<pr-url>...]
+#         wf-evidence --preflight      check that a session can start; ask to sign in if needed
+# Env:    WF_EVIDENCE_MODE     sfk | direct | skip
+#         WF_EVIDENCE_POLL     seconds between checks for the result (default 120)
+#         WF_EVIDENCE_TIMEOUT  seconds to wait for the result (default 14400, 4 hours)
+#         WF_PERMISSION_MODE   permission mode for a direct session (default: auto)
+# Config: ~/.claude/wf-repos.json "evidence": { "repo": "<owner/name>", "environment": "<sfk env>" }
+# Exit:   0 every criterion passed · 1 setup error · 2 a criterion failed, was not checked,
+#         or no result arrived · 4 skipped
+set -uo pipefail
+
+CLAUDE_DIR="${CLAUDE_HOME:-$HOME/.claude}"
+MAP="$CLAUDE_DIR/wf-repos.json"
+TEMPLATE="$CLAUDE_DIR/wf-evidence-prompt.md"
+POLL="${WF_EVIDENCE_POLL:-120}"
+TIMEOUT="${WF_EVIDENCE_TIMEOUT:-14400}"
+MODE_PERM="${WF_PERMISSION_MODE:-auto}"
+
+say() { printf '%s %s\n' "$(date +%H:%M)" "$*"; }
+die() { say "ERROR: $1" >&2; exit "${2:-1}"; }
+
+on_starfolk_box() { [ -n "${SFK_SESSION_ID:-}" ] || [ -f /etc/starfolk/oauth.env ]; }
+
+evidence_repo() { jq -r '.evidence.repo // "drata/multiverse"' "$MAP" 2>/dev/null || echo drata/multiverse; }
+evidence_env() { jq -r '.evidence.environment // empty' "$MAP" 2>/dev/null; }
+
+# Resolve the mode, and for sfk make sure we're signed in: ask when there's a terminal.
+resolve_mode() {
+  local mode="${WF_EVIDENCE_MODE:-}"
+  if [ -z "$mode" ]; then
+    if on_starfolk_box; then mode=direct; else mode=sfk; fi
+  fi
+  case "$mode" in
+    skip|direct) echo "$mode"; return ;;
+    sfk) ;;
+    *) die "WF_EVIDENCE_MODE must be sfk, direct or skip (got: $mode)" ;;
+  esac
+  command -v sfk >/dev/null 2>&1 || die "sfk isn't installed; install it, or set WF_EVIDENCE_MODE=skip to build without evidence"
+  if [ "$(sfk auth status --json 2>/dev/null | jq -r '.logged_in // false')" = "true" ]; then
+    echo sfk; return
+  fi
+  if [ -t 0 ] && [ -t 2 ]; then
+    printf '%s\n' "sfk isn't signed in, so the acceptance-evidence session can't start on Starfolk." >&2
+    printf '%s' "Sign in now (s), build without evidence (b), or quit (q)? [s/b/q] " >&2
+    local answer
+    read -r answer
+    case "$answer" in
+      s|S|"") sfk auth login >&2 || die "sfk sign-in failed"
+              [ "$(sfk auth status --json 2>/dev/null | jq -r '.logged_in // false')" = "true" ] \
+                || die "still not signed in to sfk"
+              echo sfk ;;
+      b|B) echo skip ;;
+      *) die "stopped before building" ;;
+    esac
+  else
+    die "sfk isn't signed in. Run: sfk auth login (or set WF_EVIDENCE_MODE=skip)"
+  fi
+}
+
+if [ "${1:-}" = "--preflight" ]; then
+  resolve_mode
+  exit 0
+fi
+
+TICKET="${1:-}"
+[ -n "$TICKET" ] || { echo "usage: wf-evidence <ticket> [<pr-url>...] | wf-evidence --preflight" >&2; exit 1; }
+shift
+PRS=("$@")
+[ "$#" -gt 0 ] || PRS=()
+for dep in jq; do command -v "$dep" >/dev/null 2>&1 || die "missing dependency: $dep"; done
+[ -f "$TEMPLATE" ] || die "missing $TEMPLATE (run install.sh)"
+
+MODE="$(resolve_mode)" || exit 1
+if [ "$MODE" = "skip" ]; then
+  say "$TICKET: acceptance evidence skipped"
+  echo "WF_EVIDENCE $TICKET skipped none"
+  exit 4
+fi
+
+REPO="$(evidence_repo)"
+REPO_NAME="${REPO##*/}"
+
+# Fill the prompt. The result file sits in the session repo's .git/, inside its working
+# directory (so reads don't prompt) and never committed.
+build_prompt() {
+  local result_file="$1" prs_text=""
+  if [ "${#PRS[@]}" -gt 0 ]; then
+    for pr in "${PRS[@]}"; do prs_text="$prs_text- $pr"$'\n'; done
+  else
+    prs_text="- (none given: find them from the PR links on $TICKET and its sub-issues)"$'\n'
+  fi
+  TICKET="$TICKET" RESULT_FILE="$result_file" PRS_TEXT="$prs_text" python3 -I -c '
+import os, sys
+t = open(sys.argv[1]).read()
+t = t.replace("{{TICKET}}", os.environ["TICKET"]).replace("{{RESULT_FILE}}", os.environ["RESULT_FILE"])
+t = t.replace("{{PRS}}", os.environ["PRS_TEXT"].rstrip("\n"))
+sys.stdout.write(t)' "$TEMPLATE"
+}
+
+finish() {
+  local line="$1" where="$2" state url
+  state="$(printf '%s' "$line" | awk '{ print $2 }')"
+  url="$(printf '%s' "$line" | awk '{ print $3 }')"
+  say "$TICKET: acceptance evidence ${state:-missing}${url:+, $url}"
+  echo "WF_EVIDENCE $TICKET ${state:-missing} ${url:-none} $where"
+  [ "$state" = "pass" ] && exit 0
+  exit 2
+}
+
+if [ "$MODE" = "direct" ]; then
+  CHECKOUT="$(jq -r --arg r "$REPO" '.repos[] | select(.github == $r) | .path' "$MAP" 2>/dev/null | head -1)"
+  [ -n "$CHECKOUT" ] || CHECKOUT="/workspace/$REPO_NAME"
+  [ -d "$CHECKOUT" ] || die "no checkout of $REPO at $CHECKOUT"
+  GIT_DIR_ABS="$(git -C "$CHECKOUT" rev-parse --absolute-git-dir)" || die "$CHECKOUT isn't a git checkout"
+  RESULT_FILE="$GIT_DIR_ABS/wf-evidence/$TICKET.result"
+  rm -f "$RESULT_FILE"
+  say "$TICKET: proving acceptance criteria in $CHECKOUT (direct session)"
+  (cd "$CHECKOUT" && build_prompt "$RESULT_FILE" \
+    | claude -p --permission-mode "$MODE_PERM" --output-format json) >"$GIT_DIR_ABS/wf-evidence-$TICKET.json" 2>&1 </dev/null
+  [ -f "$RESULT_FILE" ] || { say "$TICKET: the session ended without a result; see $GIT_DIR_ABS/wf-evidence-$TICKET.json"; echo "WF_EVIDENCE $TICKET missing none direct"; exit 2; }
+  finish "$(grep -m1 '^RESULT ' "$RESULT_FILE")" direct
+fi
+
+# sfk: a new Starfolk session on the evidence environment, then wait for its result file.
+RESULT_FILE="/workspace/$REPO_NAME/.git/wf-evidence/$TICKET.result"
+ENV_NAME="$(evidence_env)"
+ENV_ARGS=()
+[ -n "$ENV_NAME" ] && ENV_ARGS=(--environment "$ENV_NAME")
+say "$TICKET: starting a Starfolk evidence session (${ENV_NAME:-default environment}, $REPO)"
+OUT="$(build_prompt "$RESULT_FILE" | sfk session new --no-connect --repo "$REPO" ${ENV_ARGS[@]+"${ENV_ARGS[@]}"} 2>&1)" \
+  || die "sfk session new failed: $(printf '%s' "$OUT" | tail -3)"
+ALIAS="$(printf '%s' "$OUT" | grep -oE 'sfk session connect [a-z0-9-]+' | head -1 | awk '{ print $4 }')"
+[ -n "$ALIAS" ] || die "couldn't find the session alias in sfk's output: $(printf '%s' "$OUT" | tail -3)"
+LINK="https://app.starfolk.ai/sessions?session=$ALIAS"
+say "$TICKET: evidence session $ALIAS: $LINK"
+
+BOX=""
+deadline=$(( $(date +%s) + TIMEOUT ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  sleep "$POLL"
+  [ -n "$BOX" ] || BOX="$(sfk session list --json 2>/dev/null | jq -r --arg a "$ALIAS" '.sessions[] | select(.alias == $a) | .box_name' | head -1)"
+  [ -n "$BOX" ] || continue
+  LINE="$(printf 'cat %q 2>/dev/null\n' "$RESULT_FILE" | sfk box connect "$BOX" --no-ports --no-copy 2>/dev/null | grep -m1 '^RESULT ' || true)"
+  [ -n "$LINE" ] && finish "$LINE" "$LINK"
+done
+say "$TICKET: no result after $((TIMEOUT / 60)) minutes; the session may still be working: $LINK"
+echo "WF_EVIDENCE $TICKET timeout none $LINK"
+exit 2
