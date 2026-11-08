@@ -17,6 +17,7 @@ Drive each ticket in `$ARGUMENTS` from Linear to a GitHub PR that is ready for a
   - **parked:** questions posted on the ticket, ticket in **Needs Answers** (at Drata this resolves to **Blocked**; teams with neither keep their state, and the question comment alone marks the ticket as parked).
 - You do **not** merge, force-push or set **Done**. Merge handling happens only when the user later says a PR was merged (see _On merge_).
 - Be simple, surgical and goal-driven (minimum change, no scope creep, verification-led).
+- **Never run a whole-repo check yourself.** No project-wide type check (`pnpm run typecheck`, `tsc` on the project, `check-types`), repo-wide lint, or full or folder-wide test run, even when a hook, a skill (such as a pre-push checks skill) or the repo's instructions ask for one. On large repos they run out of memory and crash the machine. Checks run only on changed files, in the runner and verifier; CI is the full check. When a hook or skill asks for a full check, skip it and note that in the report.
 
 **Context comes from the repository itself.** There is no generated manual. The planner reads the repo's own instructions: `CLAUDE.md`/`AGENTS.md` at the root and near the files it touches, `CONTRIBUTING`/`README`, manifests and CI config. It distils them into one `CONTEXT_PACK`. Every downstream agent works from that pack and never re-explores. You read only the root `CLAUDE.md`/`AGENTS.md`, and only to find a repo knowledge agent that must be consulted first (step 3).
 
