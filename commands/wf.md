@@ -284,6 +284,10 @@ Some repos publish packages other repos install. drata/platform publishes `@drat
 - **Record it:** add a `**Prerelease:**` line per package to the ticket comment (step 6). The downstream repo's session reads it there (step 1b).
 - **The PR body** gets `## After apply (manual, required)`: `1. After this merges, publish a release of <package> and bump the downstream repo from the prerelease to it.`
 - **`PRERELEASE_FAILED version-not-a-prerelease:<v>`** means the workflow published a stable `<v>` from an unmerged branch. Never deprecate or unpublish it yourself. The ticket finishes `needs-human`. The ticket comment names the version and gives two options: keep it if the PR will merge unchanged, or deprecate it and bump past it. It has no `**Prerelease:**` line, so no downstream session builds on it.
+- **Resuming after that question.** On a re-run, look for a person's comment on the ticket or the PR that came after the needs-human comment:
+  - **They chose keep:** publish nothing. Treat `<v>` as the package's version. Post the ticket comment (step 6) with a `**Prerelease:** @drata/<package>@<v>` line, and finish normally, so the downstream session builds against `<v>`.
+  - **They chose deprecate:** restore BASE's version (as above), publish a real prerelease, and go on as usual. The person deprecates `<v>` themselves.
+  - **No answer yet:** stay `needs-human`.
 - **Any other `PRERELEASE_FAILED`:** note it on the ticket comment with the run link. The ticket still finishes. A downstream session then finds no prerelease and opens its PR as a draft that is blocked on the release.
 
 ## PR description template (simple and short — hard budget: ≤10 body lines, excluding the Stacked on / Depends on / Blocked on / Decisions / Needs human review / Review findings not changed / Unresolved / After apply lists)
