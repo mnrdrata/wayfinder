@@ -121,7 +121,7 @@ DESCRIPTION_UPDATED: true
 ```
 
 ### CREATE_SUB_ISSUE `<parent identifier>`
-Used by `/wf` to split a multi-repo ticket into one sub-issue per repo. You will be given a `TITLE`, a `DESCRIPTION` (markdown) and optionally `BLOCKED_BY` (one identifier).
+Used by `/wf` to split a multi-repo ticket into one sub-issue per repo. You will be given a `TITLE`, a `DESCRIPTION` (markdown) and optionally `BLOCKED_BY` (one or more identifiers).
 
 1. **Duplicate guard.** List the parent's sub-issues. If one already has exactly this title, create nothing and return that issue with `CREATED: false`.
 2. Get the parent issue. Create the new issue with:
@@ -130,14 +130,14 @@ Used by `/wf` to split a multi-repo ticket into one sub-issue per repo. You will
    - the parent's assignee and project (omit either if the parent has none)
    - the parent's state if it is `backlog` or `unstarted` type, otherwise the team's Todo state
    - the title and description verbatim
-3. If `BLOCKED_BY` is given, add that blocked-by relation on the new issue.
+3. For each identifier in `BLOCKED_BY`, add that blocked-by relation on the new issue.
 
 Return:
 ```
 IDENTIFIER: <new identifier>
 URL: <new issue url>
 PARENT: <parent identifier>
-BLOCKED_BY: <identifier, or "none">
+BLOCKED_BY: <comma-separated identifiers, or "none">
 CREATED: true | false
 ```
 Never create an issue outside the parent's team, and never change the parent itself.

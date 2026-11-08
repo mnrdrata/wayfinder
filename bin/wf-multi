@@ -1,15 +1,15 @@
 #!/bin/bash
-# wf-multi — build a Linear ticket that spans repos, one full /wf session per repo, in order.
+# wf-multi — build a Linear ticket that spans repos, one full /wf session per repo.
 #
 # A Claude Code session loads one repo's CLAUDE.md, project agents, hooks and skills: the
 # ones where it starts. So each repo's part of a ticket is built by its own headless session,
 # started in that repo's checkout:
 #   1. `/wf --split-only <ticket>` splits the ticket into one [repo] sub-issue per repo
-#      (or reuses the sub-issues an earlier run made) and prints them in build order.
-#   2. For each sub-issue in order, `/wf <sub-issue>` runs in that repo's checkout
-#      (from ~/.claude/wf-repos.json). A later repo's session finds the earlier repo's PR
-#      through Linear and builds against it.
-# The chain stops at the first sub-issue that doesn't finish. Re-running resumes: /wf skips
+#      (or reuses the sub-issues an earlier run made) and prints each with what it needs.
+#   2. Units are built in waves: every unit whose needs are finished starts at once, each as
+#      `/wf <sub-issue>` in its repo's checkout (from ~/.claude/wf-repos.json). A unit that
+#      needs another repo's change waits for that PR, then builds against it through Linear.
+# The run stops after a wave in which a unit didn't finish. Re-running resumes: /wf skips
 # sub-issues whose PR is already open, and reuses worktrees for the rest.
 #
 # Usage:  wf-multi <ticket-id>
@@ -60,7 +60,7 @@ SPLIT_DIR="$(jq -r '.repos[].path' "$MAP" | while read -r p; do [ -d "$p/.git" ]
 
 say "$TICKET: splitting by repo (logs: $LOG_DIR)"
 SPLIT_OUT="$(run_session "$SPLIT_DIR" "/wf --split-only $TICKET" "$LOG_DIR/split")" || die "split session failed"
-UNITS="$(printf '%s\n' "$SPLIT_OUT" | awk '$1 == "UNIT" { print $2, $3, $4 }')"
+UNITS="$(printf '%s\n' "$SPLIT_OUT" | awk '$1 == "UNIT" { print $2, $3, $4, ($5 == "" ? "-" : $5) }')"
 [ -n "$UNITS" ] || die "split printed no UNIT lines; see $LOG_DIR/split.txt"
 
 if printf '%s\n' "$UNITS" | awk '$3 == "missing" { found = 1 } END { exit !found }'; then
@@ -68,39 +68,81 @@ if printf '%s\n' "$UNITS" | awk '$3 == "missing" { found = 1 } END { exit !found
   die "add the missing repos to $MAP, then re-run" 3
 fi
 
-say "$TICKET: build order:"
-printf '%s\n' "$UNITS" | awk '{ print "  " $1 " [" $2 "] in " $3 }'
+say "$TICKET: units:"
+printf '%s\n' "$UNITS" | awk '{ printf "  %s [%s] in %s%s\n", $1, $2, $3, ($4 == "-" ? "" : " (after " $4 ")") }'
 
-STATUS=0
-REMAINING="$UNITS"
+# Build one unit; its result ("<state> <pr>") goes to <id>.result so waves can run in parallel.
+build_unit() {
+  local id="$1" repo="$2" dir="$3" out result
+  say "$id [$repo]: building in $dir"
+  if ! out="$(run_session "$dir" "/wf $id" "$LOG_DIR/$id")"; then
+    echo "error" >"$LOG_DIR/$id.result"
+    return
+  fi
+  result="$(printf '%s\n' "$out" | awk -v id="$id" '$1 == "WF_RESULT" && $2 == id { print $3, $4 }' | tail -1)"
+  echo "${result:-noresult}" >"$LOG_DIR/$id.result"
+}
+
+ALL_IDS=" $(printf '%s\n' "$UNITS" | awk 'NF { print $1 }' | tr '\n' ' ')"
 TOTAL="$(printf '%s\n' "$UNITS" | awk 'NF' | wc -l | tr -d ' ')"
+DONE=" "
 BUILT=0
-# Read the units on fd 3 so nothing in the loop body can consume them from stdin.
-while read -r ID REPO DIR <&3; do
-  [ -n "$ID" ] || continue
-  REMAINING="$(printf '%s\n' "$REMAINING" | sed '1d')"
-  say "$ID [$REPO]: building in $DIR"
-  OUT="$(run_session "$DIR" "/wf $ID" "$LOG_DIR/$ID")" || { STATUS=2; break; }
-  RESULT="$(printf '%s\n' "$OUT" | awk -v id="$ID" '$1 == "WF_RESULT" && $2 == id { print $3, $4 }' | tail -1)"
-  STATE="${RESULT%% *}"
-  PR="${RESULT#* }"
-  case "$STATE" in
-    finished|skipped)
-      say "$ID [$REPO]: $STATE, ${PR:-no PR}"; BUILT=$((BUILT + 1)) ;;
-    "")
-      say "$ID [$REPO]: no WF_RESULT line; see $LOG_DIR/$ID.txt"; STATUS=2; break ;;
-    *)
-      say "$ID [$REPO]: $STATE, ${PR:-no PR}; stopping the chain"; STATUS=2; break ;;
-  esac
-done 3<<<"$UNITS"
+STATUS=0
+PENDING="$UNITS"
+
+while [ -n "$PENDING" ] && [ "$STATUS" -eq 0 ]; do
+  # A unit is ready when everything it needs is done. A need outside this run's units is
+  # already finished (the split leaves out finished sub-issues).
+  WAVE=""
+  REST=""
+  while read -r ID REPO DIR NEEDS; do
+    [ -n "$ID" ] || continue
+    READY=1
+    if [ "$NEEDS" != "-" ]; then
+      for N in ${NEEDS//,/ }; do
+        case "$ALL_IDS" in *" $N "*) case "$DONE" in *" $N "*) ;; *) READY=0 ;; esac ;; esac
+      done
+    fi
+    if [ "$READY" -eq 1 ]; then WAVE="$WAVE$ID $REPO $DIR"$'\n'; else REST="$REST$ID $REPO $DIR $NEEDS"$'\n'; fi
+  done <<<"$PENDING"
+
+  if [ -z "$WAVE" ]; then
+    say "$TICKET: the remaining units need each other; check their blocked-by links"
+    STATUS=2
+    break
+  fi
+
+  while read -r ID REPO DIR; do
+    [ -n "$ID" ] && build_unit "$ID" "$REPO" "$DIR" &
+  done <<<"$WAVE"
+  wait
+
+  while read -r ID REPO DIR; do
+    [ -n "$ID" ] || continue
+    RESULT="$(cat "$LOG_DIR/$ID.result" 2>/dev/null)"
+    STATE="${RESULT%% *}"
+    PR=""
+    [ "$RESULT" != "$STATE" ] && PR="${RESULT#* }"
+    case "$STATE" in
+      finished|skipped)
+        say "$ID [$REPO]: $STATE, ${PR:-no PR}"; DONE="$DONE$ID "; BUILT=$((BUILT + 1)) ;;
+      error)
+        say "$ID [$REPO]: session failed; see $LOG_DIR/$ID.json"; STATUS=2 ;;
+      noresult|"")
+        say "$ID [$REPO]: no WF_RESULT line; see $LOG_DIR/$ID.txt"; STATUS=2 ;;
+      *)
+        say "$ID [$REPO]: $STATE, ${PR:-no PR}"; STATUS=2 ;;
+    esac
+  done <<<"$WAVE"
+  PENDING="$REST"
+done
 
 if [ "$STATUS" -eq 0 ] && [ "$BUILT" -ne "$TOTAL" ]; then
   say "$TICKET: only $BUILT of $TOTAL sub-issues ran; stopping"; STATUS=2
 fi
-
-if [ "$STATUS" -ne 0 ] && [ -n "$REMAINING" ]; then
+if [ "$STATUS" -ne 0 ] && [ -n "$PENDING" ]; then
   say "$TICKET: not started:"
-  printf '%s\n' "$REMAINING" | awk 'NF { print "  " $1 " [" $2 "]" }'
+  printf '%s' "$PENDING" | awk 'NF { print "  " $1 " [" $2 "]" ($4 == "-" ? "" : " (needs " $4 ")") }'
 fi
 [ "$STATUS" -eq 0 ] && say "$TICKET: every repo finished. Review and merge happen on GitHub."
 say "$TICKET: logs in $LOG_DIR"

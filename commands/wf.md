@@ -8,6 +8,8 @@ allowed-tools: Task, Bash, Read, Edit, Skill
 
 Drive each ticket in `$ARGUMENTS` from Linear to a GitHub PR that is ready for a human to review: green CI, decisions written down, ticket **In Review**. You are the orchestrator. You own the git/worktree mechanics and you sequence the agents. Agents do the thinking. `wf-linear` owns every Linear call and `wf-github` owns every GitHub call.
 
+**Which agent runs a GitHub call.** Some machines allow `gh` only inside one dedicated agent. The `github-cli` plugin's hook, for example, blocks `gh` everywhere except its `github-cli:cli` agent. When the `github-cli:cli` agent type is available in this session, send every GitHub intent below to it instead of `wf-github`. Each spawn names the intent and its inputs, and tells the agent to read `~/.claude/agents/wf-github.md`. It must run that intent's commands exactly as written there and return that intent's output shape. Everything else about the intent stays the same. Push with the worktree's own `git push` from that agent too, so nothing on the main thread calls `gh`. Without such an agent, spawn `wf-github` as usual.
+
 **Hard boundaries (never cross):**
 
 - **Hands-off. Never ask the user anything during a run.** When something is unclear, the planner picks the safe default and records it as a decision. That decision goes in the PR body and on the ticket, where a human can overrule it. The one exception is a ticket with no workable goal at all: its questions go to Linear, the ticket is parked, and the batch moves on. The user is never blocked.
@@ -39,10 +41,10 @@ With `--split-only` as the first argument, run the preconditions, step 1 and ste
 
 ```
 WF_SPLIT <ticket>
-UNIT <identifier> <repo> <checkout path>
+UNIT <identifier> <repo> <checkout path> <needs>
 ```
 
-One `UNIT` line per sub-issue in build order, or one line with the ticket itself when it needs only one repo. A unit whose repo isn't in `REPOS` prints `UNIT <identifier> <github repo> missing`. `wf-multi` reads this block.
+One `UNIT` line per sub-issue in build order, or one line with the ticket itself when it needs only one repo. `<needs>` is the comma-separated identifiers of the sibling sub-issues it is blocked by, or `-` when it is independent. A unit whose repo isn't in `REPOS` prints `UNIT <identifier> <github repo> missing -`. `wf-multi` reads this block, and builds independent units at the same time.
 
 Post one status line as each ticket moves stage (fetched → planned → executing → code review → PR open → CI green) so the user can follow a long batch. Start each line with the time from `date +%H:%M`. Keep each ticket's stage times: the final report shows how long each stage took.
 
@@ -67,13 +69,13 @@ Every ticket runs in exactly one repo. Settle that for each fetched ticket now, 
 - **A ticket with no sub-issues.** Resolve its repo:
 
   - If its title starts with a `[<repo>]` prefix that matches `REPOS`, use that repo. Never match aliases against free text: short ones like "be" or "api" appear in almost any spec.
-  - Otherwise spawn `wf-planner` with `MODE: SCOPE`. Give it the identifier, title, URL, `SPEC`, `ANSWERS`, `REPOS` and `SESSION_REPO` (or `none`). It reads the checkouts read-only and returns `STATUS: SCOPE` with one `UNIT` per repo the ticket must change, in build order, each with its repo, a title and the slice of the ticket that belongs to that repo.
+  - Otherwise spawn `wf-planner` with `MODE: SCOPE`. Give it the identifier, title, URL, `SPEC`, `ANSWERS`, `REPOS` and `SESSION_REPO` (or `none`). It reads the checkouts read-only and returns `STATUS: SCOPE` with one `UNIT` per repo the ticket must change, in build order, each with its repo, a title, the earlier units it `NEEDS`, and the slice of the ticket that belongs to that repo.
   - **One unit** → the ticket runs in that repo, unchanged. No sub-issues.
   - **Two or more units** → create the sub-issues. For each unit in order, spawn `wf-linear` `CREATE_SUB_ISSUE <parent>` with:
 
     - title `[<repo>] <unit title>`
-    - description: the unit's slice, then `Part of <parent identifier>. Built by /wf in <github repo>.` A later unit adds `Builds against the <earlier sub-issue> PR: follow what that PR actually does, not this text, where they differ.`
-    - `BLOCKED_BY` the previous unit's sub-issue (none for the first)
+    - description: the unit's slice, then `Part of <parent identifier>. Built by /wf in <github repo>.` A unit that `NEEDS` an earlier one adds `Builds against the <earlier sub-issue> PR: follow what that PR actually does, not this text, where they differ.`
+    - `BLOCKED_BY` the sub-issues of the units it `NEEDS`, and nothing else. An independent unit gets no blocked-by link, so it never waits for another repo's PR.
 
     Then replace the parent in this run with the new sub-issues and fetch each one, as above. Post one comment on the parent through `wf-linear` `POST_COMMENT`: `🤖 /wf split this ticket by repo:` followed by one line per sub-issue (`- <identifier> [<repo>] <title>`). When scoping returned `DECISIONS` (choices the ticket left open that the slices now fix, such as a route or a response shape), add `**Decided while splitting** (overrule on this ticket before the first sub-issue is built):` and one line each. The parent is now an umbrella.
 

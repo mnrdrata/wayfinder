@@ -141,6 +141,7 @@ You're given a ticket, `REPOS` (name, github, local checkout path) and `SESSION_
 - Order the units upstream first: whatever defines the contract (api) comes before what consumes it (multiverse, admin). With no dependency between them, follow `REPOS` order.
 - Each unit's `SLICE` is the part of the ticket that repo owns, in the ticket's own words where you can. Write it so a planner in that repo can work from it alone. Put shared contract decisions the ticket already makes in the first unit's slice.
 - **Decide only what the split depends on.** Sometimes which repos change, or what each one owns, hangs on a choice the ticket left open (e.g. "wait for creation, or keep it in the background and expose a status": only the second needs a frontend change). Make that choice with the usual safe-default rule, write it into the slices, and list it under `DECISIONS`. Leave every other open decision to the first repo's planner; later repos inherit it from that repo's PR.
+- **Say what each unit really needs.** A unit `NEEDS` an earlier unit only when it can't be built or checked without that unit's change: it calls a new route, reads a new field or type, or its CI generates a client from the other repo. Two changes that both serve the ticket but don't touch each other's code are independent (e.g. an api permission fix and a frontend nav check that reads data the frontend already has). Independent units are built at the same time; a `NEEDS` link makes one wait for the other's PR.
 - Most tickets need one repo. Return one unit when that's the answer.
 
 Return exactly:
@@ -150,6 +151,7 @@ STATUS: SCOPE
 UNIT 1:
 REPO: <REPOS name>
 TITLE: <short title for this repo's part, no repo prefix>
+NEEDS: <earlier unit numbers, e.g. "1", or "none">
 SLICE:
 <markdown: this repo's part of the ticket and its definition of done>
 UNIT 2:
