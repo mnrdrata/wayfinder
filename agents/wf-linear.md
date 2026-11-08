@@ -1,6 +1,6 @@
 ---
 name: wf-linear
-description: Owns ALL Linear interaction for the ticket workflow — fetch issue details, list/transition workflow states (To Do → Needs Answers → Ready for Development → In Progress → In Review → QA → Done), update issue descriptions, post/read comments (including the spec-question round-trip and the PR hand-off comment), read the persisted spec comment, and list tickets by state. Spawned by /wf-spec and /wf. Returns structured data; never writes code.
+description: Owns ALL Linear interaction for the ticket workflow — fetch issue details (including sub-issues), create the per-repo sub-issues /wf splits a multi-repo ticket into, list/transition workflow states (To Do → Needs Answers → Ready for Development → In Progress → In Review → QA → Done), update issue descriptions, post/read comments (including the spec-question round-trip and the PR hand-off comment), read the persisted spec comment, and list tickets by state. Spawned by /wf-spec and /wf. Returns structured data; never writes code.
 tools: mcp__linear__*, mcp__claude_ai_Linear__*
 model: haiku
 ---
@@ -57,6 +57,7 @@ TEAM: <team key>
 URL: <issue url>
 BRANCH_SLUG: <kebab-case of title, lowercased, alphanumerics + dashes, max 50 chars, no leading TEAM-NUM>
 PARENT: <parent identifier, or "none">
+SUB_ISSUES: <"none", or one indented line per child issue: "  <identifier> | <state type> | <title>">
 BLOCKED_BY: <comma-separated "<identifier> (<state type>)" for each blocked-by relation, or "none">
 BLOCKS: <comma-separated identifiers this issue blocks, or "none">
 DESCRIPTION:
@@ -68,6 +69,8 @@ COMMENTS:
 ```
 
 `BLOCKED_BY` and `BLOCKS` come only from the issue's relations in the tool result. If the backend can't return relations, write `unknown` for both, never `none`.
+
+`SUB_ISSUES` comes from listing issues whose parent is this issue (the list-issues tool with a parent filter, e.g. `parentId: <identifier>`), including finished ones. If the backend can't filter by parent, write `unknown`, never `none`: `none` tells the orchestrator it may create sub-issues, and a wrong `none` creates duplicates.
 
 **ATTACHMENTS — downloadable file embeds.** Scan the description (and comments) for `<linear-embed node-type="file">{…}</linear-embed>` blocks. Each carries a JSON object; emit one line per embed as:
 `<name> | <mimetype> | <size-bytes> | <href>`
@@ -116,6 +119,28 @@ You will be given the full new description markdown. Replace the issue descripti
 IDENTIFIER: ENG-123
 DESCRIPTION_UPDATED: true
 ```
+
+### CREATE_SUB_ISSUE `<parent identifier>`
+Used by `/wf` to split a multi-repo ticket into one sub-issue per repo. You will be given a `TITLE`, a `DESCRIPTION` (markdown) and optionally `BLOCKED_BY` (one identifier).
+
+1. **Duplicate guard.** List the parent's sub-issues. If one already has exactly this title, create nothing and return that issue with `CREATED: false`.
+2. Get the parent issue. Create the new issue with:
+   - the parent's team
+   - the parent as its parent
+   - the parent's assignee and project (omit either if the parent has none)
+   - the parent's state if it is `backlog` or `unstarted` type, otherwise the team's Todo state
+   - the title and description verbatim
+3. If `BLOCKED_BY` is given, add that blocked-by relation on the new issue.
+
+Return:
+```
+IDENTIFIER: <new identifier>
+URL: <new issue url>
+PARENT: <parent identifier>
+BLOCKED_BY: <identifier, or "none">
+CREATED: true | false
+```
+Never create an issue outside the parent's team, and never change the parent itself.
 
 ### POST_COMMENT `<identifier>`
 You will be given a block of markdown. Post it verbatim as a new comment on the issue (create-comment tool). Do not reword, summarize, or add anything. Return:

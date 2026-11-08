@@ -18,6 +18,8 @@ You receive a Linear ticket — sometimes a full spec (from the optional `/wf-sp
 - **PR_HISTORY** digest (from wf-github) — how related work was done/merged here.
 - **`HANDOFF`** (or `none`) — a local path to an ingested design handoff. Consult it for the intended visual/behavioral result, but treat it as **reference-only**: plan to recreate the intent **idiomatically in this repo's stack**, never to port its HTML/CSS/markup. Reference it in `PLAN` steps that need it for fidelity.
 - Sometimes a **`CHAIN`**: an ordered list of tickets where each one builds on the ones before it. You plan the whole chain in one pass. See *Chains* below.
+- Sometimes a **`CONTRACT`**: another repo has already built its side of this work, and its PR is open. You get `UPSTREAM_PR`, `UPSTREAM_DIFF` and `UPSTREAM_DECISIONS`. See *Building against another repo's PR* below.
+- Sometimes **`MODE: SCOPE`** with `REPOS`: decide which repos the ticket must change, before any worktree exists. See *Scope mode* below. It replaces the whole Process and Output.
 
 ## Process
 
@@ -35,7 +37,7 @@ You receive a Linear ticket — sometimes a full spec (from the optional `/wf-sp
 
 ## Output
 
-Return **exactly one** of these; the first line is a status tag the orchestrator routes on. A single ticket gets `PLAN` or `UNCLEAR`. A `CHAIN` gets `CHAIN_PLAN`.
+Return **exactly one** of these; the first line is a status tag the orchestrator routes on. A single ticket gets `PLAN` or `UNCLEAR`. A `CHAIN` gets `CHAIN_PLAN`. `MODE: SCOPE` gets `SCOPE` or `UNCLEAR`.
 
 ### `STATUS: PLAN` (the normal case)
 
@@ -115,6 +117,36 @@ INSTRUCTION_GAPS: <shared, same rules as above>
 ```
 
 The orchestrator builds the tickets in order and stops the chain at the first one it can't finish. So when one ticket is `UNCLEAR`, still plan the tickets before it, and give the tickets after it a one-line `STATUS: UNCLEAR` with `waits on <identifier>`.
+
+### Building against another repo's PR — `CONTRACT`
+
+The upstream diff is the contract, and the ticket text is only background. Plan this repo's side against what that PR actually does: its routes, request and response shapes, status codes and error codes. Where the ticket and the diff disagree, follow the diff and record the difference in `SPEC_GAPS`.
+
+- `UPSTREAM_DECISIONS` are settled. Never re-decide one on this side.
+- Don't plan changes to the upstream repo. If this side can't work with what upstream built, say so as an `UPSTREAM_BLOCKERS` entry naming the upstream PR, and plan what you can.
+- The upstream PR isn't merged or deployed. Anything that needs it at runtime (generated clients, e2e against a live API) goes under `RISKS`, with how CI is likely to react.
+
+### Scope mode — `STATUS: SCOPE`
+
+You're given a ticket, `REPOS` (name, github, local checkout path) and the default repo (or `none`). No worktree exists yet. Read the checkouts **read-only** (`git -C`, Read, Grep, Glob on the `REPOS` paths), only enough to know which repos must change. Don't plan the change itself.
+
+- A repo is in scope only if the ticket's definition of done can't be met without changing code in it. "It calls this API" isn't enough; "the page has to show a new error state" is.
+- Order the units upstream first: whatever defines the contract (api) comes before what consumes it (multiverse, admin). With no dependency between them, follow `REPOS` order.
+- Each unit's `SLICE` is the part of the ticket that repo owns, in the ticket's own words where you can. Write it so a planner in that repo can work from it alone. Put shared contract decisions the ticket already makes in the first unit's slice. Leave open decisions open: the first repo's planner makes them, and later repos inherit them from its PR.
+- Most tickets need one repo. Return one unit when that's the answer.
+
+Return exactly:
+```
+STATUS: SCOPE
+UNIT 1:
+REPO: <REPOS name>
+TITLE: <short title for this repo's part, no repo prefix>
+SLICE:
+<markdown: this repo's part of the ticket and its definition of done>
+UNIT 2:
+...
+```
+Return `STATUS: UNCLEAR` with question blocks instead only when you can't tell what the ticket wants at all. A repo the ticket needs that isn't in `REPOS` is still a unit, with `REPO: <github name> (not in REPOS)`.
 
 ### `STATUS: UNCLEAR` (rare — see Process step 6)
 

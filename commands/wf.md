@@ -1,5 +1,5 @@
 ---
-description: Take one or more Linear tickets from ticket to a PR with green CI, hands-off, on this machine. Each ticket gets its own git worktree; agents plan, implement, verify and review it, open the PR, then fix CI until it is green. Never asks questions mid-run, never merges, never sets Done.
+description: Take one or more Linear tickets from ticket to a PR with green CI, hands-off, on this machine. Each ticket gets its own git worktree; agents plan, implement, verify and review it, open the PR, then fix CI until it is green. A ticket that spans repos (e.g. api + multiverse) is split into one sub-issue per repo and built in order, each in its own repo, with the later repo building against the earlier repo's PR. Never asks questions mid-run, never merges, never sets Done.
 argument-hint: <ticket-id> [ticket-id...]
 allowed-tools: Task, Bash, Read, Edit
 ---
@@ -22,12 +22,20 @@ Drive each ticket in `$ARGUMENTS` from Linear to a GitHub PR that is ready for a
 
 ## Preconditions (once, before touching any ticket — fail fast)
 
-- `git rev-parse --is-inside-work-tree` succeeds. If not, stop and tell the user to run from the target repo.
-- `gh auth status` succeeds, and `git remote get-url origin` points at github.com.
+- **Repo map.** Read `~/.claude/wf-repos.json` into `REPOS` (name, github, local path, aliases; listed upstream-first). If the file is missing, `REPOS` holds only the current repo and multi-repo splitting is off.
+- **Default repo.** If `git rev-parse --is-inside-work-tree` succeeds, the current repo is the **default repo**: single-repo tickets build here, exactly as before. If it fails, there is no default repo, and every ticket must resolve to a repo in `REPOS` (step 1a). That lets `/wf` run from anywhere, e.g. one level above the checkouts.
+- `gh auth status` succeeds.
 - Linear is reachable: a `wf-linear` `FETCH <first identifier>` returns without `ERROR`.
 - `~/.claude/bin/wf-exec` is executable and `~/.claude/ticket-workflow-sandbox.sb` exists. All project code (install/test/build/lint) runs through `wf-exec`: no external network egress, no credential-file reads, secret-shaped env vars stripped. A `PreToolUse` guard enforces it.
-- `BASE` = `git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's@^origin/@@'` (fallback `main`/`master`). Run `git fetch origin`.
-- `ROOT` = `git rev-parse --show-toplevel`. Worktrees live in `ROOT/.worktrees/`. If `.worktrees/` isn't ignored (`git check-ignore -q .worktrees`), add `.worktrees/` to `ROOT/.git/info/exclude` (local only, no diff).
+- **Per repo, the first time a ticket needs it** (`<checkout>` is the default repo's top level or the `REPOS` path):
+
+  - `git -C "<checkout>" remote get-url origin` points at github.com, and matches the `REPOS` `github` value when there is one. A mismatch stops that repo's tickets only.
+  - `BASE` = `git -C "<checkout>" symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's@^origin/@@'` (fallback `main`/`master`). Run `git -C "<checkout>" fetch origin`.
+  - `ROOT` = `git -C "<checkout>" rev-parse --show-toplevel`. Worktrees live in `ROOT/.worktrees/`. If `.worktrees/` isn't ignored (`git -C "<ROOT>" check-ignore -q .worktrees`), add `.worktrees/` to `ROOT/.git/info/exclude` (local only, no diff).
+
+  Every ticket carries its own `ROOT`, `BASE` and `GH_REPO` (`owner/name` from its origin URL). Pass `REPO: <GH_REPO>` on every `wf-github` spawn for a ticket that isn't in the repo this session started in, or `gh` will act on the wrong repo.
+
+  Wherever this file says `ROOT`, `BASE` or `origin/<BASE>`, it means that ticket's repo. Run every `git` command with `-C "<ROOT>"` or `-C "<worktree>"`, never relying on the current directory.
 
 Post one status line as each ticket moves stage (fetched → planned → executing → PR open → CI green) so the user can follow a long batch. Start each line with the time from `date +%H:%M`. Keep each ticket's stage times: the final report shows how long each stage took.
 
@@ -43,6 +51,33 @@ For each ticket, spawn `wf-linear` `FETCH <id>` **and** `READ_SPEC <id>` in one 
   - `NO_PENDING` → continue as a fresh ticket.
 - **Ingest design handoffs.** If `ATTACHMENTS` is not `none`, download each **immediately**, because signed hrefs expire about 5 minutes after the fetch: `~/.claude/bin/wf-fetch-handoff "ROOT/.worktrees/.handoffs/<id>" "<href>" <size-bytes>`. Collect the printed paths as `HANDOFF` (else `none`). The handoff lives outside the ticket worktree, so it never enters the diff. On failure, note it and continue with `HANDOFF=none`.
 
+## 1a. Split multi-repo tickets into repo sub-issues (before any dispatch)
+
+Every ticket runs in exactly one repo. Settle that for each fetched ticket now, before anything is planned or dispatched.
+
+- **A ticket that already has repo sub-issues.** If `FETCH`'s `SUB_ISSUES` is not `none`, the parent is an **umbrella** and is never built itself. Replace it in this run with its open sub-issues: fetch each one (`FETCH` + `READ_SPEC`, same rules as step 1, skipping finished ones). Give each its repo from its title prefix (`[api] …`, matched against `REPOS` names and aliases, case-insensitive). A sub-issue with no prefix goes through scoping below as a ticket of its own.
+- **A ticket with no sub-issues.** Resolve its repo:
+
+  - If its title starts with a `[<repo>]` prefix that matches `REPOS`, use that repo. Never match aliases against free text: short ones like "be" or "api" appear in almost any spec.
+  - Otherwise spawn `wf-planner` in `SCOPE` mode. Give it the identifier, title, URL, `SPEC`, `ANSWERS`, `REPOS` and the default repo (or `none`). It reads the checkouts read-only and returns `STATUS: SCOPE` with one `UNIT` per repo the ticket must change, in build order, each with its repo, a title and the slice of the ticket that belongs to that repo.
+  - **One unit** → the ticket runs in that repo, unchanged. No sub-issues.
+  - **Two or more units** → create the sub-issues. For each unit in order, spawn `wf-linear` `CREATE_SUB_ISSUE <parent>` with:
+
+    - title `[<repo>] <unit title>`
+    - description: the unit's slice, then `Part of <parent identifier>. Built by /wf in <github repo>.` A later unit adds `Builds against the <earlier sub-issue> PR: follow what that PR actually does, not this text, where they differ.`
+    - `BLOCKED_BY` the previous unit's sub-issue (none for the first)
+
+    Then replace the parent in this run with the new sub-issues and fetch each one, as above. Post one comment on the parent through `wf-linear` `POST_COMMENT`: `🤖 /wf split this ticket by repo:` followed by one line per sub-issue (`- <identifier> [<repo>] <title>`). The parent is now an umbrella.
+
+  - **`STATUS: UNCLEAR` from scoping** → park the ticket exactly like a planner `UNCLEAR` in step 3.
+  - **A unit whose repo isn't in `REPOS`, or whose path isn't a git checkout** → don't create anything. Report `needs a checkout of <repo>` with the line to add to `~/.claude/wf-repos.json`, and drop the ticket.
+
+- **`SUB_ISSUES: unknown`** (the backend couldn't list children) → never create sub-issues. Build the ticket in its prefixed repo or the default repo, and note `couldn't check for sub-issues, not split` in the report.
+- **Idempotency.** `CREATE_SUB_ISSUE` is only reached when `SUB_ISSUES` is `none`, so a re-run never splits twice. It finds the sub-issues from the first run and resumes them.
+- **Umbrella bookkeeping.** Keep each umbrella's sub-issue list. Step 6 moves the umbrella to In Progress, and the CI stage moves it to In Review once every sub-issue is In Review.
+
+Each surviving ticket now carries its repo, and its `ROOT` and `BASE` from the preconditions. A sub-issue's blocked-by links make the repo units one **cross-repo chain** in step 1b.
+
 ## 1b. Order dependent tickets into chains
 
 Tickets that build on each other become a **chain**. A chain is built in order, one ticket at a time, as stacked PRs. Everything else stays independent.
@@ -51,10 +86,14 @@ Tickets that build on each other become a **chain**. A chain is built in order, 
 - **Blocker outside this run.** If a blocker is not in this batch and its `STATE_TYPE` is not `completed`, B can't build on it. Report `waits on <A> — run them together: /wf <A> <B>` and drop B. If the field is `unknown`, treat the ticket as independent.
 - **Chains.** Group the tickets connected by edges. Order each group so every blocker comes before the tickets it blocks (when there's no edge between two tickets, keep their argument order). A cycle is an error: report `dependency cycle: <ids>` and drop those tickets.
 - Build each chain as one straight stack in that order, even when two tickets don't depend on each other. Each ticket then contains everything before it.
+- **Cross-repo chains.** Branches can only stack inside one repo. When a chain crosses repos, split it into **segments**: runs of consecutive tickets in the same repo. Tickets inside a segment stack as above. Each segment's first ticket branches from its own repo's `origin/<BASE>`. A later segment builds against the earlier segment's **PR**, not its branch (see step 3 `CONTRACT` and step 6 `## Depends on`).
+- **The blocker rule inside a chain.** A blocker that is in this run is satisfied once its ticket is `DONE` with a PR open. It doesn't have to be merged. That's what lets the frontend unit follow the api unit in the same run.
 
 ## 2. Worktrees + dependencies (one ticket at a time)
 
-**Chains:** create only the **first** ticket's worktree here, from `origin/<BASE>`. Each later chain ticket gets its worktree in step 5, after the ticket before it finishes. It branches from that ticket's branch: `git worktree add "<path>" -b "<branch>" "<previous ticket's branch>"`. The resume rule and the dependency warm-up below still apply.
+**Chains:** create only the **first** ticket's worktree here, from `origin/<BASE>`. Each later chain ticket gets its worktree in step 5, after the ticket before it finishes. Inside a segment it branches from the previous ticket's branch: `git -C "<ROOT>" worktree add "<path>" -b "<branch>" "<previous ticket's branch>"`. The first ticket of a later segment is in another repo, so it branches from that repo's `origin/<BASE>`. The resume rule and the dependency warm-up below still apply.
+
+All `git worktree` commands run as `git -C "<ROOT>" …` for the ticket's own repo.
 
 - Branch `<identifier>/<BRANCH_SLUG>` (lowercase slug, identifier as Linear returns it). Worktree path `ROOT/.worktrees/<identifier>`.
 - **Resume:** if that path is already a registered worktree (`git worktree list`) on the matching branch, reuse it and keep its commits. If the path exists but is stale or on another branch, skip the ticket and report it. Never delete it.
@@ -76,7 +115,13 @@ Tickets that build on each other become a **chain**. A chain is built in order, 
 
 For each independent ticket, spawn `wf-github` `PR_HISTORY <keywords/paths from the ticket>` and then `wf-planner`. Give the planner the identifier, title, URL, resolved `SPEC`, any `ANSWERS`, `BASE`, the worktree path, the `PR_HISTORY` digest and `HANDOFF`. Route on the planner's first line:
 
-**Chains get one planner, not one per ticket.** Spawn a single `wf-planner` for the whole chain, in the first ticket's worktree. Pass `CHAIN` = every ticket in order, each with its identifier, title, URL, `SPEC`, `ANSWERS` and `HANDOFF`, plus one `PR_HISTORY` digest for the chain. It returns `STATUS: CHAIN_PLAN`: one shared `CONTEXT_PACK` and one section per ticket. Route each section like a single-ticket result below, giving every ticket the shared `CONTEXT_PACK`. When a section is `UNCLEAR`, park that ticket. Report the tickets after it in the chain as `waits on <identifier>` and drop them from this run.
+**Cross-repo chains plan one segment at a time.** A planner can only ground a plan in one repo, and a later segment has to see what the earlier segment actually built. So plan only the **first segment** here. Plan each later segment in step 5, right after the segment before it finishes, and pass that planner `CONTRACT`:
+
+- `UPSTREAM_PR`: the earlier segment's PR URL(s).
+- `UPSTREAM_DIFF`: `git -C "<earlier worktree>" diff "origin/<earlier BASE>...HEAD"` for each earlier ticket. Trim it to the public surface (routes, controllers, DTOs, exported types, error codes, migrations) when it's over about 1,500 lines, and say that it's trimmed.
+- `UPSTREAM_DECISIONS`: the earlier tickets' `SPEC_GAPS` decisions.
+
+**Chains get one planner, not one per ticket** (one per segment for a cross-repo chain). Spawn a single `wf-planner` for the whole chain or segment, in its first ticket's worktree. Pass `CHAIN` = every ticket in order, each with its identifier, title, URL, `SPEC`, `ANSWERS` and `HANDOFF`, plus one `PR_HISTORY` digest for the chain. It returns `STATUS: CHAIN_PLAN`: one shared `CONTEXT_PACK` and one section per ticket. Route each section like a single-ticket result below, giving every ticket the shared `CONTEXT_PACK`. When a section is `UNCLEAR`, park that ticket. Report the tickets after it in the chain as `waits on <identifier>` and drop them from this run.
 
 - **`STATUS: PLAN`** → keep `GOAL`, `DEFINITION_OF_DONE`, `CONTEXT_PACK`, `PLAN`, `TESTS`, `RISKS`, `SPEC_GAPS`, `UPSTREAM_BLOCKERS` and `INSTRUCTION_GAPS`. Then:
   - Spawn `wf-linear` `SET_STATUS <id> "In Progress"` (skip if it is already In Progress).
@@ -102,7 +147,7 @@ For each independent ticket, spawn `wf-github` `PR_HISTORY <keywords/paths from 
 
 ## 4. Overlap guard
 
-Build each planned ticket's file set from its `CONTEXT_PACK` `files in play`. A chain counts as **one unit**, and its file set is the union across its tickets. A unit whose set intersects another's goes to a **sequential tail**. The rest form the **parallel set**. This stops two runners racing on the same file.
+Build each planned ticket's file set from its `CONTEXT_PACK` `files in play`, keyed by repo: files in different repos never overlap. A chain counts as **one unit**, and its file set is the union across its tickets. A unit whose set intersects another's goes to a **sequential tail**. The rest form the **parallel set**. This stops two runners racing on the same file.
 
 ## 5. Execute (≤3 units concurrently)
 
@@ -110,14 +155,17 @@ For each independent ticket in the parallel set, spawn `wf-runner` with its `GOA
 
 **A chain runs one ticket at a time, in order.** For each ticket in the chain:
 
-1. If it isn't the first, create its worktree from the previous ticket's branch (step 2).
-2. Spawn `wf-runner` as above, with diff base = the previous ticket's branch (the first ticket uses `origin/<BASE>`). The reviewer and verifier then judge only this ticket's commits.
-3. Do step 6 for it straight away, so its branch is on `origin` before the next PR targets it.
-4. Continue only when the runner returned `DONE`. Otherwise report each remaining ticket in the chain as `waits on <identifier>`. Their worktrees are not created.
+1. If it isn't the first, create its worktree (step 2): from the previous ticket's branch inside a segment, or from its repo's `origin/<BASE>` when it starts a new segment.
+2. **First ticket of a later segment:** plan the segment now (step 3, with `CONTRACT`), and route the result as step 3 does. An `UNCLEAR` parks it and stops the chain.
+3. Spawn `wf-runner` as above. Diff base = the previous ticket's branch inside a segment, or `origin/<BASE>` for a segment's first ticket. The reviewer and verifier then judge only this ticket's commits.
+4. Do step 6 for it straight away, so its branch is on `origin` before the next PR targets it, and its PR exists before a later segment builds against it.
+5. Continue only when the runner returned `DONE` (a `DONE` that opened a draft only for `UPSTREAM_BLOCKERS` counts). Otherwise report each remaining ticket in the chain as `waits on <identifier>`. Their worktrees are not created.
 
 ## 6. PR + ticket comment (per ticket)
 
-- **PR base.** An independent ticket and the first ticket of a chain use `BASE`. A later chain ticket uses the previous ticket's branch, and its body gets the `## Stacked on` section.
+- **PR base.** An independent ticket and the first ticket of a chain or segment use `BASE`. A later ticket inside a segment uses the previous ticket's branch, and its body gets the `## Stacked on` section.
+- **Cross-repo dependency.** The first ticket of a later segment opens **ready**, not draft: it is real code against a real PR, not a stand-in. Its body gets the `## Depends on` section naming the earlier segment's PR(s) and saying to merge this one after that PR is deployed. Then `wf-github` `COMMENT_PR` on the earlier PR with one line pointing at this one, so whoever merges it sees the follow-up.
+- **Umbrella.** When a ticket is a sub-issue that step 1a split out or resumed, spawn `wf-linear` `SET_STATUS <umbrella> "In Progress"` once, when its first sub-issue reaches this step.
 - **Empty guard:** `git -C "<path>" rev-list --count "<diff base>..HEAD"` must be > 0 (the diff base from step 5). If it is 0, open no PR and treat the ticket as `BLOCKED: no changes made`.
 - **`DONE` with `UPSTREAM_BLOCKERS`** (not `none`) → `CREATE_PR` with `DRAFT: true`, and fill the `## Blocked on` section. A ready PR would invite a merge against a stand-in. The ticket stays In Progress and skips the CI stage. In a chain, the next ticket still continues, because this ticket's code is verified.
 - **`DONE`** → spawn `wf-github` `CREATE_PR` (ready for review) with the worktree path, the PR base, `HEAD`, title and body (template below). Capture `PR_URL`.
@@ -163,7 +211,7 @@ For every PR opened ready in step 6, loop:
 Reviewers post findings, not just pass/fail: AI review bots (Unblocked), security bots (AppSec, Wiz), scanner annotations, and humans. Read them all before calling a PR ready.
 
 1. Spawn `wf-github` `REVIEWS <pr>`. It returns unresolved threads, review bodies and comments on the current head, and check-run annotations.
-2. **Nothing open** → spawn `wf-linear` `SET_STATUS <id> "In Review"` (Code Review on teams without In Review). Done.
+2. **Nothing open** → spawn `wf-linear` `SET_STATUS <id> "In Review"` (Code Review on teams without In Review). Done. If this was the last open sub-issue of an umbrella and every sibling is now In Review, also set the umbrella to In Review, and post one comment on it listing each sub-issue's PR.
 3. **Findings** → spawn `wf-executor` in the worktree with the findings as the fix list, plus the `CONTEXT_PACK`. Tell it: for each finding, either fix it (verify narrowly, commit) or return `DECLINED: <finding> — <reason>` when it is wrong, already handled, out of scope, or needs a human decision. Never weaken a test or a check to satisfy a reviewer.
 4. Push any fix with `wf-github` `PUSH`. Then answer every finding:
    - Fixed → `REPLY_THREAD` with "Fixed in <short sha>: <one line>". For a bot's thread, also `RESOLVE_THREAD`.
@@ -179,7 +227,10 @@ Write the shortest body that lets a reviewer approve with confidence. Short is t
 
 ```
 ## Stacked on
-<previous ticket's PR URL> — merge that first. This PR shows only its own changes.   (later chain tickets only)
+<previous ticket's PR URL> — merge that first. This PR shows only its own changes.   (later tickets inside a segment only)
+
+## Depends on
+<earlier segment's PR URL, e.g. drata/api#123> — merge this after that PR is deployed.   (first ticket of a later cross-repo segment only)
 
 ## Blocked on
 - <each UPSTREAM_BLOCKERS entry: what is missing, where it must land, the stand-in to replace>   (omit if none)
@@ -230,7 +281,7 @@ Rewrite any agent output you quote to this standard.
 
 ## After all tickets
 
-Print a table: identifier → PR URL → CI (`green` / `none` / `running` / `red` / `after <PR> merges`) → reviews (`<n> fixed / <n> declined / <n> open`) → Linear state → time (plan / execute / CI, in minutes, from your stage timestamps) → note. List chain tickets in chain order, and note `stacked on <identifier>` on each later one. Then list, only where non-empty:
+Print a table: identifier → repo → PR URL → CI (`green` / `none` / `running` / `red` / `after <PR> merges`) → reviews (`<n> fixed / <n> declined / <n> open`) → Linear state → time (plan / execute / CI, in minutes, from your stage timestamps) → note. List chain tickets in chain order, and note `stacked on <identifier>` or `depends on <PR>` on each later one. Group a split ticket's sub-issues under a row for its umbrella, and say which sub-issues this run created. Then list, only where non-empty:
 
 - **Parked:** questions are on the ticket. Answer there, then re-run `/wf <id>`.
 - **Waiting:** tickets dropped because a ticket they depend on didn't finish, with the `/wf` command that runs them together.
@@ -239,7 +290,7 @@ Print a table: identifier → PR URL → CI (`green` / `none` / `running` / `red
 - **Defaults taken:** any question you answered with its ✅ option because the reply was blank or ambiguous.
 - **Repo instruction gaps:** the distinct `INSTRUCTION_GAPS` across tickets, under the heading "Add to this repo's CLAUDE.md so the next run doesn't have to guess". These are suggestions. Never edit the repo's instructions yourself.
 
-Remind the user that review and merge happen on GitHub, by a human. When a PR is merged, they tell you ("ENG-123 is merged") and you run *On merge*.
+Remind the user that review and merge happen on GitHub, by a human. When a PR is merged, they tell you ("ENG-123 is merged") and you run _On merge_.
 
 ## On merge (only when the user says a specific ticket's PR was merged)
 
@@ -247,7 +298,7 @@ This often runs in a later session. Resolve everything from the identifier, not 
 
 For each merged `<identifier>`:
 
-1. Branch = `git branch --list "<identifier>/*"` (the one match). Worktree = the `git worktree list` entry on that branch. If neither exists, it was already cleaned up; do steps 2–3 and report.
+1. Find its repo: the default repo first, then each `REPOS` checkout, until `git -C "<checkout>" branch --list "<identifier>/*"` has the one match. That checkout is `ROOT` for the steps below. Worktree = the `git -C "<ROOT>" worktree list` entry on that branch. If no repo has the branch, it was already cleaned up; do steps 2–3 and report.
 2. Spawn `wf-github` `PR_STATUS <identifier-or-branch>`. If `STATE` is not `MERGED`, stop and tell the user. Change nothing.
 3. Spawn `wf-linear` `SET_STATUS <identifier> "QA"`. At Drata, Linear's GitHub integration has usually moved the ticket to **Merged** already; `wf-linear` then leaves it unchanged, which is correct. On a team with a real QA state and no automation, the ticket moves to QA for a human to verify. Either way the workflow never sets Done, and the Linear result never blocks cleanup.
 4. Clean up from `ROOT`:
@@ -270,7 +321,10 @@ Never clean up a worktree whose PR has not been confirmed merged.
 
 - **Stacking needs Linear links.** Tickets stack only when they're linked with "blocked by" and run in the same `/wf`. Without the links, each ticket branches from `origin/<BASE>` and can't use another's unmerged work.
 - **Chains are serial.** A chain's tickets never run in parallel, and the chain stops at the first ticket that doesn't finish.
-- **Work in another repo isn't built.** `/wf` works in one repo. A missing release elsewhere becomes `UPSTREAM_BLOCKERS` and a draft PR. The other repo's change needs its own ticket and run.
+- **Other repos are built only when they're in `~/.claude/wf-repos.json`.** A ticket that spans listed repos is split into repo sub-issues and built in order. A dependency on a repo that isn't listed, or on a **package release** (e.g. a new `@drata/enums` version), is still an `UPSTREAM_BLOCKERS` draft. A later repo builds against an unmerged PR, but not against an unpublished package.
+- **A later repo's CI may need the earlier repo deployed.** If the frontend's CI checks against a generated client or a deployed API, it fails until the api PR ships. The executor reports that as `BLOCKED: unrelated`, and the PR ends up draft with the reason written on it.
+- **A `[<repo>]` title prefix skips scoping.** A prefixed ticket always builds in that one repo. Leave the prefix off when a ticket may need more than one.
+- **Scoping costs one planner pass per unprefixed ticket**, even when the answer is the current repo. It's read-only and stops as soon as the repos are clear.
 - **The overlap guard prevents racing, not merge conflicts,** and it is only as good as the planner's `files in play`.
 - **`wf-runner` is the single inner loop** (execute → concurrent review+verify → ≤2 fix rounds). Loop policy changes go in `wf-runner.md` only.
 - **CI and review-finding fixes skip the reviewer.** They are narrow, and the human review on the PR covers them.

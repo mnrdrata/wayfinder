@@ -1,0 +1,17 @@
+{
+  "_comment": "Repo map for /wf. Copy to ~/.claude/wf-repos.json (install.sh does this once) and set each path to your local checkout. A ticket that spans repos is split into one sub-issue per repo, and each runs in the checkout listed here. A sub-issue title prefix like [api] is matched against name and aliases. List upstream repos first: that is the default build order when nothing else decides it.",
+  "repos": [
+    {
+      "name": "api",
+      "github": "your-org/api",
+      "path": "/path/to/api",
+      "aliases": ["api", "backend"]
+    },
+    {
+      "name": "web",
+      "github": "your-org/web",
+      "path": "/path/to/web",
+      "aliases": ["web", "frontend", "fe"]
+    }
+  ]
+}

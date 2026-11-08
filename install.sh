@@ -67,6 +67,14 @@ sed -e "s#__CLAUDE__#$CLAUDE#g" -e "s#__HOME__#$HOME#g" "$REPO/ticket-workflow-s
 # seed it empty, once, and leave any existing log (a user's accumulated history) untouched.
 [ -f "$CLAUDE/wf-spec-gaps.md" ] || cp "$REPO/wf-spec-gaps.md" "$CLAUDE/wf-spec-gaps.md"
 
+# --- repo map for multi-repo tickets (machine-specific; never clobber) ----------
+# /wf splits a ticket that spans repos into one sub-issue per repo and runs each in the
+# checkout this file names. Seed the example once; the user edits the paths.
+if [ ! -f "$CLAUDE/wf-repos.json" ]; then
+  cp "$REPO/wf-repos.example.json" "$CLAUDE/wf-repos.json"
+  warn "Edit $CLAUDE/wf-repos.json with your local checkouts to let /wf build tickets that span repos."
+fi
+
 # --- eval harness --------------------------------------------------------------
 mkdir -p "$CLAUDE/ticket-workflow-evals"
 cp -R "$REPO"/ticket-workflow-evals/. "$CLAUDE/ticket-workflow-evals/"
