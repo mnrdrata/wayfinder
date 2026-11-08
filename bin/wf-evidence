@@ -134,7 +134,9 @@ if [ "$MODE" = "direct" ]; then
 fi
 
 # sfk: a new Starfolk session on the evidence environment, then wait for its result file.
-RESULT_FILE="/workspace/$REPO_NAME/.git/wf-evidence/$TICKET.result"
+# On a Starfolk box /workspace/<repo>/.git is a file pointing at the real git dir, so the
+# session and the poller both resolve it on the box instead of assuming .git/ is a folder.
+RESULT_FILE="\$(git -C /workspace/$REPO_NAME rev-parse --absolute-git-dir)/wf-evidence/$TICKET.result"
 ENV_NAME="$(evidence_env)"
 ENV_ARGS=()
 [ -n "$ENV_NAME" ] && ENV_ARGS=(--environment "$ENV_NAME")
@@ -146,13 +148,21 @@ ALIAS="$(printf '%s' "$OUT" | grep -oE 'sfk session connect [a-z0-9-]+' | head -
 LINK="https://app.starfolk.ai/sessions?session=$ALIAS"
 say "$TICKET: evidence session $ALIAS: $LINK"
 
+# A hung connection shouldn't stall the poll loop (timeout isn't on stock macOS).
+TIMEOUT_CMD=()
+command -v timeout >/dev/null 2>&1 && TIMEOUT_CMD=(timeout 90)
 BOX=""
 deadline=$(( $(date +%s) + TIMEOUT ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
   sleep "$POLL"
   [ -n "$BOX" ] || BOX="$(sfk session list --json 2>/dev/null | jq -r --arg a "$ALIAS" '.sessions[] | select(.alias == $a) | .box_name' | head -1)"
   [ -n "$BOX" ] || continue
-  LINE="$(printf 'cat %q 2>/dev/null\n' "$RESULT_FILE" | sfk box connect "$BOX" --no-ports --no-copy 2>/dev/null | grep -m1 '^RESULT ' || true)"
+  # Read the result file; fall back to the RESULT line the session ends its last message with,
+  # so a result written somewhere unexpected doesn't leave this waiting until the timeout.
+  LINE="$(printf '%s\n' \
+    "cat \"$RESULT_FILE\" 2>/dev/null" \
+    "ls -t ~/.claude/projects/-workspace-$REPO_NAME/*.jsonl 2>/dev/null | head -1 | xargs -r grep -oE '\"text\":\"[^\"]*RESULT (pass|fail|partial|error) [^\"\\\\ ]+' | grep -oE 'RESULT .*' | tail -1" \
+    | ${TIMEOUT_CMD[@]+"${TIMEOUT_CMD[@]}"} sfk box connect "$BOX" --no-ports --no-copy 2>/dev/null | grep -m1 '^RESULT ' || true)"
   [ -n "$LINE" ] && finish "$LINE" "$LINK"
 done
 say "$TICKET: no result after $((TIMEOUT / 60)) minutes; the session may still be working: $LINK"

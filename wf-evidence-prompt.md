@@ -30,7 +30,7 @@ Pick the evidence that shows the behaviour, not just that code exists:
 
 Rules for every capture:
 
-- **Write all capture scripts, screenshots and recordings under `.git/wf-evidence/` in the repo checkout you're working in.** That folder is inside the working directory, so you can read your own captures back without a permission prompt, and git never commits it. Don't use `~/.devbox/tmp` or `/tmp` for anything you need to read back.
+- **Write all capture scripts, screenshots and recordings under `wf-evidence/` in the checkout's git directory** (`git rev-parse --absolute-git-dir`; `.git` may be a file pointing elsewhere, as on Starfolk). That folder belongs to the checkout, so you can read your own captures back without a permission prompt, and git never commits it. Don't use `~/.devbox/tmp` or `/tmp` for anything you need to read back.
 - **Look at every screenshot before you post it.** A page that answered 200 can still be blank, half-rendered or showing the wrong state.
 - Use test data only. Never capture real customer data, tokens or secrets.
 
@@ -71,4 +71,4 @@ Write one line to the file `{{RESULT_FILE}}`, creating its folder if needed:
 RESULT <pass | fail | partial> <URL of the comment you posted>
 ```
 
-Use `pass` when every criterion passed, `fail` when any failed, and `partial` when none failed but some weren't checked. If you couldn't post the comment at all, write `RESULT error none` and end with the reason. The script that started you reads this file to know you're done.
+Use `pass` when every criterion passed, `fail` when any failed, and `partial` when none failed but some weren't checked. If you couldn't post the comment at all, write `RESULT error none` and end with the reason. The script that started you reads this file to know you're done. Also end your final message with the same `RESULT` line, as a fallback if the file can't be read.
