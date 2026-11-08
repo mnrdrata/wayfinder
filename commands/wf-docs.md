@@ -32,7 +32,14 @@ A path that doesn't exist becomes `missing`. The builder then works from the exa
   - title, description, URL, assignee and project
   - every sub-issue, with its PR links
   - all comments, including the acceptance-evidence comment with its image markdown intact
-- `wf-github`: once the PR URLs are known, run `PR_DIFF` for each, plus each PR's title and body.
+- Diffs, once the PR URLs are known: read each PR with plain `git` in its repo's checkout (match the URL's `owner/repo` to `github` in `repos`). Doing it locally means no `gh` call for a hook to block. In separate Bash calls, run:
+
+  ```
+  git -C <checkout> fetch -q origin pull/<n>/head
+  git -C <checkout> diff "$(git -C <checkout> merge-base FETCH_HEAD origin/HEAD)" FETCH_HEAD
+  ```
+
+  This works for merged PRs too. If `origin/HEAD` isn't set, use the repo's release or default branch instead (for example `origin/release` on drata/api). Only for a repo with no local checkout, ask `wf-github` for `PR_DIFF`. The PR titles come from the ticket's PR links.
 
 A diff over about 3,000 lines is trimmed. Keep routes, navigation, UI copy and strings, permissions, error messages and migrations, and list the files that were left out.
 
