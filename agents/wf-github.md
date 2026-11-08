@@ -42,7 +42,7 @@ Keep it to high-signal items only — this is fuel for the planner/wf-spec-build
 
 Given: worktree path, BASE branch, HEAD branch, title, body (markdown), and optionally `DRAFT: true`. Publish and open the PR:
 
-1. `cd "<worktree>" && git push -u origin "<HEAD>"` (if already pushed, that's fine).
+1. The orchestrator has already pushed `<HEAD>` from its main thread. If `git -C "<worktree>" ls-remote --heads origin "<HEAD>"` shows it missing, return `ERROR: branch not pushed` instead of pushing it yourself: some machines block subagent pushes.
 2. From the repo root (no `cd`), pass the body on standard input:
    ```
    gh pr create --base "<BASE>" --head "<HEAD>" --title "<title>" --body-file - <<'WF_BODY'
@@ -63,7 +63,7 @@ If a PR for this head already exists, return its URL instead of erroring (`gh pr
 
 ### PUSH
 
-Given: worktree path. `cd "<worktree>" && git push` (add `-u origin <branch>` if no upstream is set). Never force-push. The branch's open PR updates automatically — do NOT create one. Return `PUSHED: <branch>` (or `ERROR`).
+Given: worktree path. The orchestrator runs this push on its own main thread, because some machines block subagent pushes: `git -C "<worktree>" push` (add `-u origin <branch>` if no upstream is set). If you're a subagent and receive this intent, return `ERROR: push must run on the orchestrator main thread`, plus the command to run. Never force-push. The branch's open PR updates automatically — do NOT create one. Return `PUSHED: <branch>` (or `ERROR`).
 
 ### COMMENT_PR
 

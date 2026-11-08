@@ -58,9 +58,30 @@ run_session() {
   jq -r '.result // empty' "$log.json" | tee "$log.txt"
 }
 
+# A checkout Claude Code hasn't been trusted in loads none of its own settings, hooks or
+# allow rules in a headless session, which is the whole point of one session per repo.
+CLAUDE_JSON="${CLAUDE_CONFIG_JSON:-$HOME/.claude.json}"
+is_trusted() {
+  [ -f "$CLAUDE_JSON" ] || return 0   # can't tell; don't block
+  [ "$(jq -r --arg p "$1" '.projects[$p].hasTrustDialogAccepted // false' "$CLAUDE_JSON" 2>/dev/null)" = "true" ]
+}
+require_trusted() {
+  local bad=""
+  for dir in "$@"; do is_trusted "$dir" || bad="$bad $dir"; done
+  [ -z "$bad" ] && return 0
+  say "ERROR: Claude Code hasn't been trusted in:" >&2
+  for dir in $bad; do printf '  %s\n' "$dir" >&2; done
+  printf '%s\n' "A headless session there ignores the repo's own settings, hooks and allow rules." \
+    "Run 'claude' once in each, accept the trust prompt, exit, then re-run." >&2
+  exit 1
+}
+
 # The split can run from any listed checkout: it only reads the checkouts and talks to Linear.
-SPLIT_DIR="$(jq -r '.repos[].path' "$MAP" | while read -r p; do [ -d "$p/.git" ] || [ -f "$p/.git" ] && { echo "$p"; break; }; done)"
+# Prefer a trusted one; fall back to the first that exists (and stop if it isn't trusted).
+SPLIT_DIR="$(jq -r '.repos[].path' "$MAP" | while read -r p; do { [ -d "$p/.git" ] || [ -f "$p/.git" ]; } && is_trusted "$p" && { echo "$p"; break; }; done)"
+[ -n "$SPLIT_DIR" ] || SPLIT_DIR="$(jq -r '.repos[].path' "$MAP" | while read -r p; do [ -d "$p/.git" ] || [ -f "$p/.git" ] && { echo "$p"; break; }; done)"
 [ -n "$SPLIT_DIR" ] || die "no checkout in $MAP exists on this machine"
+require_trusted "$SPLIT_DIR"
 
 say "$TICKET: splitting by repo (logs: $LOG_DIR)"
 SPLIT_OUT="$(run_session "$SPLIT_DIR" "/wf --split-only $TICKET" "$LOG_DIR/split")" || die "split session failed"
@@ -74,6 +95,8 @@ fi
 
 say "$TICKET: units:"
 printf '%s\n' "$UNITS" | awk '{ printf "  %s [%s] in %s%s\n", $1, $2, $3, ($4 == "-" ? "" : " (after " $4 ")") }'
+# shellcheck disable=SC2046
+require_trusted $(printf '%s\n' "$UNITS" | awk 'NF { print $3 }' | sort -u)
 
 # Build one unit; its result ("<state> <pr>") goes to <id>.result so waves can run in parallel.
 build_unit() {
