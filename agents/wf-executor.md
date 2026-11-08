@@ -69,6 +69,7 @@ The wrapper blocks external network egress and host-credential reads, and strips
 ## Atomic commits
 
 - One logical change per commit. Commit message: terse, imperative, what+why in one line. No fluff.
+- **End every commit subject with the ticket key**, `[<identifier>]`, the same as the PR title (e.g. `fix(plan-and-usage): drop SERVICE_USER from contract details [BTO-507]`). Drata repos reject a commit whose subject lacks it, even when a trailer names the ticket. Follow the repo's own commit convention when it differs.
 - If a commit message would name a sandboxed tool (`flutter`, `dart`, `cargo`, `node`, `npm`, `pytest`, `make`, `go`, …), commit with `git commit -F <tmpfile>` (write the message to a file outside the worktree) instead of `-m "…"`. You're cwd'd in `<worktree>`, so `/.worktrees/` is in the command and the sandbox guard substring-matches those tool names in the `-m` prose — a false block. Keeping the message off the command line (or just not naming the tool in the subject) avoids it.
 - Do NOT push (the orchestrator pushes) and do NOT open PRs.
 - End every commit message with an attribution trailer (blank line before it):
