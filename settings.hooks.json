@@ -1,5 +1,5 @@
 {
-  "_comment": "Merge into your ~/.claude/settings.json. 'hooks': add these entries into the matching PreToolUse / SubagentStop arrays (don't replace existing ones). 'permissions.allow': add these rules to your existing allow list — they let wf-github run the gh/git commands it needs without a prompt, so hands-off /wf runs don't stall or get denied in auto mode.",
+  "_comment": "Merge into your ~/.claude/settings.json. 'hooks': add these entries into the matching PreToolUse / SubagentStop arrays (don't replace existing ones). 'permissions.allow': add these rules to your existing allow list \u2014 they let wf-github run the gh/git commands it needs without a prompt, so hands-off /wf runs don't stall or get denied in auto mode.",
   "permissions": {
     "allow": [
       "Bash(gh auth status)",
@@ -13,7 +13,10 @@
       "Bash(gh run view:*)",
       "Bash(gh run rerun:*)",
       "Bash(git push:*)",
-      "Bash(~/.claude/bin/wf-ci-checks:*)"
+      "Bash(~/.claude/bin/wf-ci-checks:*)",
+      "Bash(~/.claude/bin/wf-pr-reviews:*)",
+      "Bash(gh api repos/{owner}/{repo}/pulls/:*)",
+      "Bash(gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=:*)"
     ]
   },
   "hooks": {
