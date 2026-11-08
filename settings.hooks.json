@@ -17,7 +17,9 @@
       "Bash(~/.claude/bin/wf-ci-checks:*)",
       "Bash(~/.claude/bin/wf-pr-reviews:*)",
       "Bash(gh api repos/{owner}/{repo}/pulls/:*)",
-      "Bash(gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=:*)"
+      "Bash(gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=:*)",
+      "Bash(~/.claude/bin/wf-prerelease:*)",
+      "Bash(~/.claude/bin/wf-dep-bump:*)"
     ]
   },
   "hooks": {

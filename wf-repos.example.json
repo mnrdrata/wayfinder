@@ -1,5 +1,5 @@
 {
-  "_comment": "Repo map for /wf. Copy to ~/.claude/wf-repos.json (install.sh does this once) and set each path to your local checkout. A ticket that spans repos is split into one sub-issue per repo, and each runs in the checkout listed here. A sub-issue title prefix like [api] is matched against name and aliases. List upstream repos first: that is the default build order when nothing else decides it. 'evidence' names the repo and Starfolk environment wf-evidence starts its acceptance-evidence session in.",
+  "_comment": "Repo map for /wf. Copy to ~/.claude/wf-repos.json (install.sh does this once) and set each path to your local checkout. A ticket that spans repos is split into one sub-issue per repo, and each runs in the checkout listed here. A sub-issue title prefix like [api] is matched against name and aliases. List upstream repos first: that is the default build order when nothing else decides it. 'evidence' names the repo and Starfolk environment wf-evidence starts its acceptance-evidence session in. A repo that publishes packages other repos install can add 'prerelease': {'workflow': '<publish workflow file>', 'packages_dir': 'packages'}; /wf then publishes a prerelease from its PR branch for the downstream repo to build against.",
   "repos": [
     {
       "name": "api",

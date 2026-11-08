@@ -97,7 +97,7 @@ Tickets that build on each other become a **chain**. A chain is built in order, 
 - **Blocker outside this run.** If a blocker A is not in this batch, fetch it with `wf-linear` `FETCH <A>`:
 
   - `STATE_TYPE` is `completed` → satisfied. B is independent.
-  - A's comments include `🤖 /wf opened <PR_URL> (ready for review…`, and `wf-github` `PR_STATUS <PR_URL>` says it is open → satisfied, with an **upstream PR**. B builds from `origin/<BASE>`, not stacked, and step 3 gives its planner `CONTRACT` from that PR. This is how a repo's sub-issue follows the one before it in another repo: the earlier session finished its PR, and this session builds against it.
+  - A's comments include `🤖 /wf opened <PR_URL> (ready for review…`, and `wf-github` `PR_STATUS <PR_URL>` says it is open → satisfied, with an **upstream PR**. B builds from `origin/<BASE>`, not stacked, and step 3 gives its planner `CONTRACT` from that PR. This is how a repo's sub-issue follows the one before it in another repo: the earlier session finished its PR, and this session builds against it. When that comment also has `**Prerelease:**` lines (a package the upstream repo published from its PR branch, step 7c), keep them as `UPSTREAM_PACKAGES`, e.g. `@drata/enums@0.6.22-BTO-105.0`.
   - Otherwise B can't build on it. Report `waits on <A>` (add `— run them together: /wf <A> <B>` when A is in this repo) and drop B.
 
   If the field is `unknown`, treat the ticket as independent.
@@ -124,6 +124,12 @@ Tickets that build on each other become a **chain**. A chain is built in order, 
 
   The offline flag is **required**: without it the tool probes the network and hangs until the `wf-exec` timeout. Skip this when there's no manifest, or when the dependency dir already exists on a resume. **Don't loop on failure:** if a package isn't cached (usually a dependency the ticket adds), note it once and continue. The executor flags it in `NOTES`, and CI installs it with network. To warm the cache, build the project once normally outside the workflow. On large repos, raise the timeout: `WF_EXEC_TIMEOUT=1800`.
 
+- **Use upstream prereleases.** When the ticket has `UPSTREAM_PACKAGES` (step 1b), point the worktree at them before planning, so the planner and executor see the new types and values:
+
+  1. Run `~/.claude/bin/wf-dep-bump "<worktree>" <each package@version>`. It's the one registry call the workflow makes outside the sandbox: `--ignore-scripts`, so no project code runs. Don't run the package manager with network any other way.
+  2. On `BUMPED`, commit the manifest and lockfile changes in the worktree: `chore(deps): use <package@version> from <upstream PR> [<identifier>]`.
+  3. On `BUMP_FAILED`, don't plan against the prerelease. The ticket goes on as if the package weren't published: the planner lists it under `UPSTREAM_BLOCKERS`, and the PR opens as a draft.
+
 - **Worktree-path discipline — pass this rule to every agent:** every file operation targets the absolute worktree path. `Bash` commands `cd "<path>"` first. `Read`/`Edit`/`Write`/`Grep`/`Glob` use absolute paths under `<path>`. Repo-relative paths resolve to `ROOT`, the main checkout, which is the WRONG tree.
 
 ## 3. Plan (all tickets, concurrently — read-only)
@@ -141,6 +147,7 @@ For each independent ticket, spawn `wf-github` `PR_HISTORY <keywords/paths from 
 - `UPSTREAM_PR`: the PR URL(s).
 - `UPSTREAM_DIFF`: `wf-github` `PR_DIFF <PR_URL>` for each. Trim it to the public surface (routes, controllers, DTOs, exported types, error codes, migrations) when it's over about 1,500 lines, and say that it's trimmed.
 - `UPSTREAM_DECISIONS`: the **Decisions made** section of the upstream ticket's `🤖 /wf opened` comment, plus any **Decided while splitting** lines on the umbrella.
+- `UPSTREAM_PACKAGES`: the prereleases step 2 bumped the worktree to (or `none`). They're installed, so plan against their real values with no stand-ins. The bump is already committed; don't plan it again.
 
 **Chains get one planner, not one per ticket.** Spawn a single `wf-planner` for the whole chain, in the first ticket's worktree. Pass `CHAIN` = every ticket in order, each with its identifier, title, URL, `SPEC`, `ANSWERS` and `HANDOFF`, plus one `PR_HISTORY` digest and one `REPO_GUIDANCE` for the chain. It returns `STATUS: CHAIN_PLAN`: one shared `CONTEXT_PACK` and one section per ticket. Route each section like a single-ticket result below, giving every ticket the shared `CONTEXT_PACK`. When a section is `UNCLEAR`, park that ticket. Report the tickets after it in the chain as `waits on <identifier>` and drop them from this run.
 
@@ -216,6 +223,8 @@ Keep the counts (rounds, findings fixed, findings declined) for the PR body and 
 
   **Blocked on** (only when UPSTREAM_BLOCKERS is not none)
   <each blocker, one line>
+
+  **Prerelease:** `<@scope/package@version>`   (one line per package step 7c published, or omit)
   ```
 
 ## 7. CI stage (all ready PRs from this run, concurrently)
@@ -246,7 +255,7 @@ For every PR opened ready in step 6, loop:
 Reviewers post findings, not just pass/fail: AI review bots (Unblocked), security bots (AppSec, Wiz), scanner annotations, and humans. Read them all before calling a PR ready.
 
 1. Spawn `wf-github` `REVIEWS <pr>`. It returns unresolved threads, review bodies and comments on the current head, and check-run annotations.
-2. **Nothing open, and nothing from the CI stage left to answer** → spawn `wf-linear` `SET_STATUS <id> "In Review"` (Code Review on teams without In Review), except on a stacked PR (see _Stacked PRs_). Linear's GitHub integration may already have moved the ticket when the PR opened; the call is idempotent. Post the ticket comment (step 6) with the real status. Done. **Umbrella:** if the ticket is a sub-issue that step 1a split out, spawn `wf-linear` `FETCH <umbrella>`. When every one of its `SUB_ISSUES` is now In Review or `completed` (siblings may have been built by other sessions), set the umbrella to In Review and post one comment on it listing each sub-issue's PR.
+2. **Nothing open, and nothing from the CI stage left to answer** → first publish any prerelease (step 7c), then spawn `wf-linear` `SET_STATUS <id> "In Review"` (Code Review on teams without In Review), except on a stacked PR (see _Stacked PRs_). Linear's GitHub integration may already have moved the ticket when the PR opened; the call is idempotent. Post the ticket comment (step 6) with the real status. Done. **Umbrella:** if the ticket is a sub-issue that step 1a split out, spawn `wf-linear` `FETCH <umbrella>`. When every one of its `SUB_ISSUES` is now In Review or `completed` (siblings may have been built by other sessions), set the umbrella to In Review and post one comment on it listing each sub-issue's PR.
 3. **Findings** → hand the executor only findings it hasn't seen: skip any bot thread it already fixed or declined in the CI stage. Spawn `wf-executor` in the worktree with them as the fix list, plus the `CONTEXT_PACK` and `REPO_GUIDANCE`. Tell it: for each finding, either fix it (verify narrowly, commit) or return it under `DECLINED` with a reason. Never weaken a test or a check to satisfy a reviewer.
 4. Push any fix with `wf-github` `PUSH`. Then answer every finding, including the bot findings the CI stage fixed or declined:
    - Fixed → `REPLY_THREAD` with "Fixed in <short sha>: <one line>", then `RESOLVE_THREAD`. Do this whoever opened the thread: review comments under a person's account are often a bot running on their credentials.
@@ -255,6 +264,16 @@ Reviewers post findings, not just pass/fail: AI review bots (Unblocked), securit
 5. If you pushed and a review bot's last review is on an older commit, ask it to re-review where the bot supports that (Unblocked: `COMMENT_PR` with exactly `@unblocked re-review`). Then go back to step 1 of the CI stage: the push re-runs CI.
 6. **Security gate.** A finding from a security reviewer (AppSec, Wiz, any check named for security) rated High or Critical, or with no rating, is never declined automatically. If the executor can't fix it, `MARK_DRAFT`, list it under `## Needs human review`, and leave the ticket In Progress.
 7. Review rounds share the CI stage's budget of 3 fix rounds per PR. When it runs out with findings still open, the PR stays ready only if every open finding has a reply. Otherwise `MARK_DRAFT` and leave the ticket In Progress.
+
+## 7c. Prerelease (repos that publish packages)
+
+Some repos publish packages other repos install. drata/platform publishes `@drata/enums` and `@drata/types`. A downstream repo can't build against a change there until it's published, so a ready PR in such a repo publishes a prerelease from its own branch.
+
+- **When:** the ticket's repo has a `prerelease` block in `REPOS` (`workflow`, and `packages_dir`, default `packages`), its PR is ready with CI green and nothing open, and the diff touches `<packages_dir>/<package>/`. Skip draft PRs.
+- **How:** for each touched package, `wf-github` (or `github-cli:cli`) runs `~/.claude/bin/wf-prerelease <owner/repo> <workflow> <branch> <package> <identifier>`. It starts the publish workflow with `release_type=prerelease` on the PR branch, waits for it, and prints `PRERELEASE @drata/<package>@<version>`. The workflow pushes a version commit to the branch, so afterwards run `git -C "<worktree>" pull --ff-only`.
+- **Record it:** add a `**Prerelease:**` line per package to the ticket comment (step 6). The downstream repo's session reads it there (step 1b).
+- **The PR body** gets `## After apply (manual, required)`: `1. After this merges, publish a release of <package> and bump the downstream repo from the prerelease to it.`
+- **`PRERELEASE_FAILED`:** note it on the ticket comment with the run link. The ticket still finishes. A downstream session then finds no prerelease and opens its PR as a draft that is blocked on the release.
 
 ## PR description template (simple and short — hard budget: ≤10 body lines, excluding the Stacked on / Depends on / Blocked on / Decisions / Needs human review / Review findings not changed / Unresolved / After apply lists)
 
@@ -370,6 +389,7 @@ Never clean up a worktree whose PR has not been confirmed merged.
 - **One repo per session.** A session builds only `SESSION_REPO`'s tickets, because only that repo's `CLAUDE.md`, project agents, hooks and skills are loaded. A ticket spanning repos is split here, and `wf-run` (or you) runs `/wf` once per repo, in order.
 - **Splitting covers only repos in `~/.claude/wf-repos.json`.** A dependency on a repo that isn't listed, or on a **package release** (e.g. a new `@drata/enums` version), is still an `UPSTREAM_BLOCKERS` draft. A later repo builds against an unmerged PR, but not against an unpublished package.
 - **The shared branch name carries the umbrella's key.** Linear's GitHub integration may link every repo's PR to the umbrella as well as to its sub-issue, and move the umbrella when a PR merges. The sub-issues' own states stay correct, because each PR's title and body name its sub-issue.
+- **Packages ship as prereleases first.** A downstream PR built on an upstream prerelease (step 7c) depends on a version that exists only for testing. Before it merges, the upstream PR has to merge and publish a real release, and the downstream PR has to bump to it. Both PR bodies say so under `## After apply`.
 - **A later repo may not be able to check its build locally.** A frontend that generates its API client from the api's swagger (multiverse does) fetches it over the network, which the sandbox blocks. Its CI does it, and finds the api PR through the shared branch name. So the frontend's local checks may leave typing to CI.
 - **A `[<repo>]` title prefix skips scoping.** A prefixed ticket always builds in that one repo. Leave the prefix off when a ticket may need more than one.
 - **Scoping costs one planner pass per unprefixed ticket**, even when the answer is the current repo. It's read-only and stops as soon as the repos are clear.

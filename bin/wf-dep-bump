@@ -1,0 +1,32 @@
+#!/bin/bash
+# wf-dep-bump — point a worktree at a prerelease another repo just published.
+#
+# The one place /wf reaches a package registry: the build sandbox has no network, so it can't
+# resolve a version published minutes ago. This runs the repo's package manager with
+# --ignore-scripts, so no project code (install hooks, postinstall) runs. It changes only the
+# dependency entry, the lockfile and the installed packages.
+#
+# Usage:  wf-dep-bump <worktree> <package>@<version> [<package>@<version>...]
+# Output: BUMPED <package>@<version> ...   (exit 0)  ·  BUMP_FAILED <reason>   (exit 2)
+set -uo pipefail
+
+[ "$#" -ge 2 ] || { echo "usage: wf-dep-bump <worktree> <package>@<version> [...]" >&2; exit 1; }
+WT="$1"; shift
+[ -d "$WT" ] || { echo "BUMP_FAILED no-such-worktree"; exit 2; }
+for spec in "$@"; do
+  case "$spec" in
+    @*/*@[0-9]*) ;;
+    *) echo "BUMP_FAILED bad-spec:$spec"; exit 2 ;;
+  esac
+done
+cd "$WT" || { echo "BUMP_FAILED cannot-cd"; exit 2; }
+
+if [ -f pnpm-lock.yaml ]; then
+  pnpm add "$@" --ignore-scripts >.wf-dep-bump.log 2>&1 || { echo "BUMP_FAILED pnpm-add (see $WT/.wf-dep-bump.log)"; exit 2; }
+elif [ -f package-lock.json ]; then
+  npm install "$@" --ignore-scripts --save-exact >.wf-dep-bump.log 2>&1 || { echo "BUMP_FAILED npm-install (see $WT/.wf-dep-bump.log)"; exit 2; }
+else
+  echo "BUMP_FAILED no-pnpm-or-npm-lockfile"; exit 2
+fi
+rm -f .wf-dep-bump.log
+echo "BUMPED $*"

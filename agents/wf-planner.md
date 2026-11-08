@@ -130,6 +130,7 @@ The orchestrator builds the tickets in order and stops the chain at the first on
 The upstream diff is the contract, and the ticket text is only background. Plan this repo's side against what that PR actually does: its routes, request and response shapes, status codes and error codes. Where the ticket and the diff disagree, follow the diff and record the difference in `SPEC_GAPS`.
 
 - `UPSTREAM_DECISIONS` are settled. Never re-decide one on this side.
+- `UPSTREAM_PACKAGES` (when not `none`) are prereleases the orchestrator already installed and committed in this worktree. Use their real new values and types directly. Never add a stand-in for something a listed package provides, and don't plan the version bump.
 - Don't plan changes to the upstream repo. If this side can't work with what upstream built, say so as an `UPSTREAM_BLOCKERS` entry naming the upstream PR, and plan what you can.
 - The upstream PR isn't merged or deployed. Anything that needs it at runtime (generated clients, e2e against a live API) goes under `RISKS`, with how CI is likely to react.
 

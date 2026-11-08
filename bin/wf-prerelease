@@ -1,0 +1,55 @@
+#!/bin/bash
+# wf-prerelease — publish a prerelease of one package from a PR branch, and print its version.
+#
+# Runs the repo's publish workflow with release_type=prerelease on <branch> (drata/platform:
+# ops-publish-package.yml). The workflow bumps the package to <x.y.z>-<ticket>.<n>, pushes
+# that version commit to the branch, and publishes to GitHub Packages. A downstream repo can
+# then build against the new version before the PR merges.
+#
+# Usage:  wf-prerelease <owner/repo> <workflow-file> <branch> <package> <ticket>
+#         e.g. wf-prerelease drata/platform ops-publish-package.yml BTO-105/x enums BTO-105
+# Env:    WF_PRERELEASE_TIMEOUT  seconds to wait for the workflow (default 1800)
+# Output: PRERELEASE @drata/<package>@<version>   (exit 0)
+#         PRERELEASE_FAILED <reason> <run url>    (exit 2)
+set -uo pipefail
+
+[ "$#" -eq 5 ] || { echo "usage: wf-prerelease <owner/repo> <workflow-file> <branch> <package> <ticket>" >&2; exit 1; }
+REPO="$1" WORKFLOW="$2" BRANCH="$3" PKG="$4" TICKET="$5"
+TIMEOUT="${WF_PRERELEASE_TIMEOUT:-1800}"
+fail() { echo "PRERELEASE_FAILED $1 ${2:-none}"; exit 2; }
+
+STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+gh workflow run "$WORKFLOW" --repo "$REPO" --ref "$BRANCH" \
+  -f package="$PKG" -f release_type=prerelease -f ticket_id="$TICKET" >/dev/null 2>&1 \
+  || fail "could-not-start-workflow"
+
+# Find the run this dispatch created: the newest one on the branch, created after we started.
+RUN_ID=""
+for _ in $(seq 1 30); do
+  sleep 5
+  RUN_ID="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --branch "$BRANCH" --event workflow_dispatch \
+    --limit 5 --json databaseId,createdAt \
+    --jq "[.[] | select(.createdAt >= \"$STARTED\")] | sort_by(.createdAt) | last | .databaseId // empty" 2>/dev/null)"
+  [ -n "$RUN_ID" ] && break
+done
+[ -n "$RUN_ID" ] || fail "run-not-found"
+RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
+
+deadline=$(( $(date +%s) + TIMEOUT ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  STATE="$(gh run view "$RUN_ID" --repo "$REPO" --json status,conclusion --jq '.status + " " + (.conclusion // "")' 2>/dev/null)"
+  case "$STATE" in
+    "completed success") break ;;
+    completed*) fail "workflow-${STATE#completed }" "$RUN_URL" ;;
+  esac
+  sleep 20
+done
+[ "${STATE:-}" = "completed success" ] || fail "timeout" "$RUN_URL"
+
+# The workflow pushed the bumped version to the branch; read it back from there.
+VERSION="$(gh api "repos/$REPO/contents/packages/$PKG/package.json?ref=$BRANCH" \
+  -H "Accept: application/vnd.github.raw" --jq '.version' 2>/dev/null)"
+case "$VERSION" in
+  *-"$TICKET".*) echo "PRERELEASE @drata/$PKG@$VERSION" ;;
+  *) fail "version-not-a-prerelease:${VERSION:-unknown}" "$RUN_URL" ;;
+esac
