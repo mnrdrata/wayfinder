@@ -42,10 +42,14 @@ an overview; when they disagree, the files win.
   with its questions posted to Linear.
 - **Context comes from the repo.** The Opus planner reads the repo's own
   instructions and code once and emits a dense Context Pack. Cheaper downstream
-  agents work from it instead of re-reading the codebase. Gaps in the repo's
-  instructions come back as suggested `CLAUDE.md` additions.
+  agents work from it instead of re-reading the codebase. When a repo keeps its
+  rules behind its own knowledge agent (drata/api's `llm-search`), `/wf` consults
+  that agent first and passes its answer down. Gaps in the repo's instructions come
+  back as suggested additions.
 - **Scoped local checks, CI as the finish line.** Agents check only what the change
-  touches. Whole-repo suites run in CI, and `/wf` fixes CI failures until green.
+  touches. Before the PR opens, Claude Code's built-in `/code-review` runs up to 2
+  review and fix rounds. After it opens, `/wf` fixes CI failures and open
+  review-bot findings (Unblocked, AppSec) until green.
 - **Single-owner boundaries.** Only `wf-linear` touches Linear; only `wf-github`
   touches GitHub. A `SubagentStop` hook blocks either from finishing without a real
   tool call (no fabricated answers).

@@ -33,7 +33,7 @@ For research/spike cases, where the deliverable is a recorded decision, not code
 2. Spawn `wf-judge` with `STAGE=decision`, the case (TICKET + `RUBRIC:decision`), and `ARTIFACT`. Record its verdict. (No branch or reset needed — the decision stage only reads the fixture.)
 
 ### Stage: plan
-1. Spawn `wf-planner` with: the case TICKET as the enriched ticket, the fixture path as the worktree, `PR_HISTORY=none`, and this flag: **"EVAL MODE — do NOT return `STATUS: UNCLEAR`; resolve each open decision conservatively, record it in `SPEC_GAPS`, and produce your best `STATUS: PLAN`."** Capture its full output as `ARTIFACT`.
+1. Spawn `wf-planner` with: the case TICKET as the enriched ticket, the fixture path as the worktree, `PR_HISTORY=none`, `REPO_GUIDANCE=none`, and this flag: **"EVAL MODE — do NOT return `STATUS: UNCLEAR`; resolve each open decision conservatively, record it in `SPEC_GAPS`, and produce your best `STATUS: PLAN`."** Capture its full output as `ARTIFACT`.
 2. Spawn `wf-judge` with `STAGE=plan`, the case (TICKET + `RUBRIC:plan`), and `ARTIFACT`. Record its verdict.
 
 **Chain cases.** When the case has a `chain:` line (ordered ticket ids), the TICKET block holds one `### <id>` section per ticket. Spawn `wf-planner` once with `CHAIN` = those tickets in that order. Use the same EVAL MODE flag, but ask for `STATUS: CHAIN_PLAN` instead of `STATUS: PLAN`. Chain cases run only the plan stage.
@@ -49,7 +49,7 @@ For research/spike cases, where the deliverable is a recorded decision, not code
 Exercises `wf-reviewer` against a planted-flaw diff — the case ships a `## MUTATION` (full post-change contents per `### file:` entry, simulating a flawed executor's work) and a `RUBRIC:review`.
 1. Throwaway branch: `git -C "<fixture>" checkout -b eval/<id>`.
 2. Apply the mutation: overwrite each file named by a `### file:` heading with its fenced contents, then `git -C "<fixture>" add -A && git -C "<fixture>" commit -m "eval: planted diff for review stage"`.
-3. Spawn `wf-reviewer` with: the TICKET's goal + acceptance criteria, `PLAN=none` (tell it: judge the diff directly against the criteria), `CONTEXT_PACK=none`, `HANDOFF=none`, the fixture path as the worktree, and diff base `main` — tell it explicitly there is no `origin` here, so the diff is `git diff main...HEAD`. Do NOT tell it the flaws are planted. Capture its full output as `ARTIFACT`.
+3. Spawn `wf-reviewer` with: the TICKET's goal + acceptance criteria, `TICKET` = the case's TICKET block, `PLAN=none` (tell it: judge the diff directly against the criteria), `CONTEXT_PACK=none`, `REPO_GUIDANCE=none`, `HANDOFF=none`, the fixture path as the worktree, and diff base `main` — tell it explicitly there is no `origin` here, so the diff is `git diff main...HEAD`. Do NOT tell it the flaws are planted. Capture its full output as `ARTIFACT`.
 4. Spawn `wf-judge` with `STAGE=review`, the case (TICKET + `## MUTATION` + `RUBRIC:review`), and `ARTIFACT`.
 5. Reset: `git -C "<fixture>" checkout main && git -C "<fixture>" branch -D eval/<id> && git -C "<fixture>" clean -fd`.
 
