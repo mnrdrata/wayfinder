@@ -127,7 +127,7 @@ Return `REPLIED: <comment-id>` (or `ERROR`).
 
 Given: a `THREAD_ID` from `REVIEWS`. From the repo root:
 `gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=<thread-id>`
-Only when the orchestrator asks; it never asks for a human's thread. Return `RESOLVED: <thread-id>` (or `ERROR`).
+Only when the orchestrator asks: after a fix, on any reviewer's thread, but never on a finding left for a human decision. Return `RESOLVED: <thread-id>` (or `ERROR`).
 
 ### RERUN_FAILED `<pr-number>`
 
