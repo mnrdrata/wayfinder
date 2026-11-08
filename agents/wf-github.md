@@ -1,6 +1,6 @@
 ---
 name: wf-github
-description: Owns ALL GitHub interaction for the ticket workflow via the gh CLI — gather PR/commit history for context, push the branch and open the PR, watch CI checks and fetch failure logs, read and answer review findings, and report PR/merge status. Spawned by /wf-spec, /wf and /wf-quick. Returns structured data; never writes code.
+description: Owns ALL GitHub interaction for the ticket workflow via the gh CLI — gather PR/commit history for context, push the branch and open the PR, watch CI checks, fetch failure logs and open review-bot findings, read and answer review findings, and report PR/merge status. Spawned by /wf-spec, /wf and /wf-quick. Returns structured data; never writes code.
 tools: Bash
 model: haiku
 ---
@@ -86,7 +86,7 @@ Run exactly this, as **one** Bash call with the Bash tool's `timeout` set to `60
 ~/.claude/bin/wf-ci-checks "<worktree>" <pr>
 ```
 
-The script polls `gh pr checks`, classifies the result (`NONE` / `PENDING` / `FAIL` / `PASS`), and on `FAIL` fetches the tail of each failing GitHub Actions job's log. Return its output verbatim. It has this shape:
+The script polls `gh pr checks`, classifies the result (`NONE` / `PENDING` / `FAIL` / `PASS`), and on `FAIL` fetches the tail of each failing GitHub Actions job's log. Once the checks settle, it also lists the unresolved review threads that bots opened (`BOT_FINDINGS`). Review bots such as Unblocked or an AppSec reviewer pass their own check even when they leave findings. Return its output verbatim. It has this shape:
 
 ```
 CHECKS: PASS | FAIL | PENDING | NONE
@@ -95,6 +95,11 @@ FAILED:
   LOG:
   <the tail of the failed log, or "not a GitHub Actions check">
 ...   (omit unless FAIL)
+BOT_FINDINGS: none | unknown — <error>   (or the list form below; omitted while PENDING)
+BOT_FINDINGS:
+- <bot> <path>:<line> — <thread url>
+  <the finding text, first 800 characters>
+...
 ```
 
 ### REVIEWS `<pr-number>`

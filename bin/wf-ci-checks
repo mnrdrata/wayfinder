@@ -1,11 +1,28 @@
 #!/bin/bash
-# wf-ci-checks — watch a PR's CI checks until they settle (at most ~9 min), then report.
+# wf-ci-checks — watch a PR's CI checks until they settle (at most ~9 min), then report
+# the checks and any open review-bot findings.
 # Read-only. One plain command so a single permission rule covers it (no inline loops).
 # Usage: wf-ci-checks <worktree> <pr-number>
 set -uo pipefail
 WT="${1:?usage: wf-ci-checks <worktree> <pr-number>}"
 PR="${2:?usage: wf-ci-checks <worktree> <pr-number>}"
 cd "$WT" || { echo "ERROR: no such worktree: $WT"; exit 1; }
+
+# Unresolved, non-outdated review threads opened by bots (Unblocked, an AppSec bot, ...).
+# Their checks pass even when they leave findings, so a green rollup alone isn't clean.
+bot_findings() {
+  sleep 15  # a bot posts its review just after its check completes
+  local out
+  out=$(gh api graphql -F owner='{owner}' -F name='{repo}' -F pr="$PR" -f query='
+query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){
+reviewThreads(first:100){nodes{isResolved isOutdated path line comments(first:1){nodes{author{__typename login} body url}}}}}}}' \
+    --jq '.data.repository.pullRequest.reviewThreads.nodes[]
+      | select((.isResolved | not) and (.isOutdated | not))
+      | .comments.nodes[0] as $c | select($c.author.__typename == "Bot")
+      | "- \($c.author.login) \(.path):\(.line // "?") — \($c.url)\n  \($c.body | gsub("\\s+"; " ") | gsub("<!--.*?-->"; "") | .[0:800])"' 2>&1) \
+    || { echo "BOT_FINDINGS: unknown — ${out:0:300}"; return; }
+  if [ -z "$out" ]; then echo "BOT_FINDINGS: none"; else echo "BOT_FINDINGS:"; echo "$out"; fi
+}
 
 j='[]'
 for i in $(seq 1 26); do
@@ -22,9 +39,9 @@ done
 n=$(jq 'length' <<<"$j")
 p=$(jq '[.[] | select(.bucket=="pending")] | length' <<<"$j")
 f=$(jq '[.[] | select(.bucket=="fail" or .bucket=="cancel")] | length' <<<"$j")
-if   [ "$n" -eq 0 ]; then echo "CHECKS: NONE"; exit 0
+if   [ "$n" -eq 0 ]; then echo "CHECKS: NONE"; bot_findings; exit 0
 elif [ "$p" -gt 0 ]; then echo "CHECKS: PENDING"; exit 0
-elif [ "$f" -eq 0 ]; then echo "CHECKS: PASS"; exit 0
+elif [ "$f" -eq 0 ]; then echo "CHECKS: PASS"; bot_findings; exit 0
 fi
 
 echo "CHECKS: FAIL"
@@ -42,3 +59,4 @@ while IFS=$'\t' read -r name workflow link; do
     echo "  not a GitHub Actions check — see the link"
   fi
 done
+bot_findings

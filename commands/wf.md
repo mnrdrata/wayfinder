@@ -1,7 +1,7 @@
 ---
-description: Take one or more Linear tickets from ticket to a PR with green CI, hands-off, on this machine. Each ticket gets its own git worktree; agents plan, implement, verify and review it, open the PR, then fix CI until it is green. A ticket that spans repos (e.g. api + multiverse) is split into one sub-issue per repo and built in order, each in its own repo, with the later repo building against the earlier repo's PR. Never asks questions mid-run, never merges, never sets Done.
+description: Take one or more Linear tickets from ticket to a PR with green CI, hands-off, on this machine. Each ticket gets its own git worktree; agents plan, implement, verify and review it, open the PR, then fix CI and review findings until it is green. A ticket that spans repos (e.g. api + multiverse) is split into one sub-issue per repo and built in order, each in its own repo, with the later repo building against the earlier repo's PR. Never asks questions mid-run, never merges, never sets Done.
 argument-hint: <ticket-id> [ticket-id...]
-allowed-tools: Task, Bash, Read, Edit
+allowed-tools: Task, Bash, Read, Edit, Skill
 ---
 
 # /wf
@@ -12,13 +12,13 @@ Drive each ticket in `$ARGUMENTS` from Linear to a GitHub PR that is ready for a
 
 - **Hands-off. Never ask the user anything during a run.** When something is unclear, the planner picks the safe default and records it as a decision. That decision goes in the PR body and on the ticket, where a human can overrule it. The one exception is a ticket with no workable goal at all: its questions go to Linear, the ticket is parked, and the batch moves on. The user is never blocked.
 - Every ticket ends in exactly one of these states:
-  - **finished:** PR ready for review, CI green (or no CI configured), ticket **In Review**.
+  - **finished:** PR ready for review, CI green (or no CI configured) with no open review-bot findings, ticket **In Review**.
   - **needs a human:** draft PR (or no PR) with the reasons written on it and on the ticket, ticket stays **In Progress**.
   - **parked:** questions posted on the ticket, ticket in **Needs Answers** (at Drata this resolves to **Blocked**; teams with neither keep their state, and the question comment alone marks the ticket as parked).
 - You do **not** merge, force-push or set **Done**. Merge handling happens only when the user later says a PR was merged (see _On merge_).
 - Be simple, surgical and goal-driven (minimum change, no scope creep, verification-led).
 
-**Context comes from the repository itself.** There is no generated manual. The planner reads the repo's own instructions: `CLAUDE.md`/`AGENTS.md` at the root and near the files it touches, `CONTRIBUTING`/`README`, manifests and CI config. It distils them into one `CONTEXT_PACK`. Every downstream agent works from that pack and never re-explores. You do not read the repo instructions yourself.
+**Context comes from the repository itself.** There is no generated manual. The planner reads the repo's own instructions: `CLAUDE.md`/`AGENTS.md` at the root and near the files it touches, `CONTRIBUTING`/`README`, manifests and CI config. It distils them into one `CONTEXT_PACK`. Every downstream agent works from that pack and never re-explores. You read only the root `CLAUDE.md`/`AGENTS.md`, and only to find a repo knowledge agent that must be consulted first (step 3).
 
 ## Preconditions (once, before touching any ticket — fail fast)
 
@@ -37,7 +37,7 @@ Drive each ticket in `$ARGUMENTS` from Linear to a GitHub PR that is ready for a
 
   Wherever this file says `ROOT`, `BASE` or `origin/<BASE>`, it means that ticket's repo. Run every `git` command with `-C "<ROOT>"` or `-C "<worktree>"`, never relying on the current directory.
 
-Post one status line as each ticket moves stage (fetched → planned → executing → PR open → CI green) so the user can follow a long batch. Start each line with the time from `date +%H:%M`. Keep each ticket's stage times: the final report shows how long each stage took.
+Post one status line as each ticket moves stage (fetched → planned → executing → code review → PR open → CI green) so the user can follow a long batch. Start each line with the time from `date +%H:%M`. Keep each ticket's stage times: the final report shows how long each stage took.
 
 ## 1. Fetch (all tickets, concurrently)
 
@@ -113,15 +113,21 @@ All `git worktree` commands run as `git -C "<ROOT>" …` for the ticket's own re
 
 ## 3. Plan (all tickets, concurrently — read-only)
 
-For each independent ticket, spawn `wf-github` `PR_HISTORY <keywords/paths from the ticket>` and then `wf-planner`. Give the planner the identifier, title, URL, resolved `SPEC`, any `ANSWERS`, `BASE`, the worktree path, the `PR_HISTORY` digest and `HANDOFF`. Route on the planner's first line:
+**Consult the repo's knowledge agent first, when the repo requires one.** Some repos keep their rules behind their own agent and block every other agent from reading the guidance files. drata/api does this: its `CLAUDE.md` says to invoke `llm-search` before writing any code. The workflow's agents can't spawn agents, so this step is yours:
 
-**Cross-repo chains plan one segment at a time.** A planner can only ground a plan in one repo, and a later segment has to see what the earlier segment actually built. So plan only the **first segment** here. Plan each later segment in step 5, right after the segment before it finishes, and pass that planner `CONTRACT`:
+1. Read the root `CLAUDE.md`/`AGENTS.md` once. If it says to consult a repo-defined agent before writing code, or before a kind of change, that agent is the knowledge agent.
+2. Spawn it once per ticket (once per chain) with the identifier, title and `SPEC`. Ask for the repo rules, patterns, gotchas and exact names (classes, methods, commands) that apply, including the general coding rules every change must follow. For an agent tied to a narrower trigger (e.g. "before any user-facing string"), ask it only when the ticket involves that kind of change.
+3. Pass its answer verbatim as `REPO_GUIDANCE` to the planner, and later to the runner. With no such agent, `REPO_GUIDANCE` is `none`.
+
+For each independent ticket, spawn `wf-github` `PR_HISTORY <keywords/paths from the ticket>` and then `wf-planner`. Give the planner the identifier, title, URL, resolved `SPEC`, any `ANSWERS`, `BASE`, the worktree path, the `PR_HISTORY` digest, `REPO_GUIDANCE` and `HANDOFF`. Route on the planner's first line:
+
+**Cross-repo chains plan one segment at a time.** A planner can only ground a plan in one repo, and a later segment has to see what the earlier segment actually built. So plan only the **first segment** here. Plan each later segment in step 5, right after the segment before it finishes. Consult that repo's own knowledge agent for its `REPO_GUIDANCE` (the rule above, run against the later repo's `CLAUDE.md`), and pass that planner `CONTRACT`:
 
 - `UPSTREAM_PR`: the earlier segment's PR URL(s).
 - `UPSTREAM_DIFF`: `git -C "<earlier worktree>" diff "origin/<earlier BASE>...HEAD"` for each earlier ticket. Trim it to the public surface (routes, controllers, DTOs, exported types, error codes, migrations) when it's over about 1,500 lines, and say that it's trimmed.
 - `UPSTREAM_DECISIONS`: the earlier tickets' `SPEC_GAPS` decisions.
 
-**Chains get one planner, not one per ticket** (one per segment for a cross-repo chain). Spawn a single `wf-planner` for the whole chain or segment, in its first ticket's worktree. Pass `CHAIN` = every ticket in order, each with its identifier, title, URL, `SPEC`, `ANSWERS` and `HANDOFF`, plus one `PR_HISTORY` digest for the chain. It returns `STATUS: CHAIN_PLAN`: one shared `CONTEXT_PACK` and one section per ticket. Route each section like a single-ticket result below, giving every ticket the shared `CONTEXT_PACK`. When a section is `UNCLEAR`, park that ticket. Report the tickets after it in the chain as `waits on <identifier>` and drop them from this run.
+**Chains get one planner, not one per ticket** (one per segment for a cross-repo chain). Spawn a single `wf-planner` for the whole chain or segment, in its first ticket's worktree. Pass `CHAIN` = every ticket in order, each with its identifier, title, URL, `SPEC`, `ANSWERS` and `HANDOFF`, plus one `PR_HISTORY` digest and one `REPO_GUIDANCE` for the chain. It returns `STATUS: CHAIN_PLAN`: one shared `CONTEXT_PACK` and one section per ticket. Route each section like a single-ticket result below, giving every ticket the shared `CONTEXT_PACK`. When a section is `UNCLEAR`, park that ticket. Report the tickets after it in the chain as `waits on <identifier>` and drop them from this run.
 
 - **`STATUS: PLAN`** → keep `GOAL`, `DEFINITION_OF_DONE`, `CONTEXT_PACK`, `PLAN`, `TESTS`, `RISKS`, `SPEC_GAPS`, `UPSTREAM_BLOCKERS` and `INSTRUCTION_GAPS`. Then:
   - Spawn `wf-linear` `SET_STATUS <id> "In Progress"` (skip if it is already In Progress).
@@ -151,15 +157,26 @@ Build each planned ticket's file set from its `CONTEXT_PACK` `files in play`, ke
 
 ## 5. Execute (≤3 units concurrently)
 
-For each independent ticket in the parallel set, spawn `wf-runner` with its `GOAL`, `DEFINITION_OF_DONE`, `PLAN`, `CONTEXT_PACK`, `HANDOFF`, the diff base `origin/<BASE>` and the worktree path. Run at most 3 units at once (cost scales with concurrency). Then run the tail one unit at a time the same way. Each runner returns `DONE`, `NEEDS_HUMAN` or `BLOCKED`. Runners never touch Linear or GitHub. All mutations stay with you.
+For each independent ticket in the parallel set, spawn `wf-runner` with its `GOAL`, `DEFINITION_OF_DONE`, `PLAN`, `CONTEXT_PACK`, `TICKET` (its resolved `SPEC`), `REPO_GUIDANCE`, `HANDOFF`, the diff base `origin/<BASE>` and the worktree path. Run at most 3 units at once (cost scales with concurrency). Then run the tail one unit at a time the same way. Each runner returns `DONE`, `NEEDS_HUMAN` or `BLOCKED`. Runners never touch Linear or GitHub. All mutations stay with you.
 
 **A chain runs one ticket at a time, in order.** For each ticket in the chain:
 
 1. If it isn't the first, create its worktree (step 2): from the previous ticket's branch inside a segment, or from its repo's `origin/<BASE>` when it starts a new segment.
 2. **First ticket of a later segment:** plan the segment now (step 3, with `CONTRACT`), and route the result as step 3 does. An `UNCLEAR` parks it and stops the chain.
 3. Spawn `wf-runner` as above. Diff base = the previous ticket's branch inside a segment, or `origin/<BASE>` for a segment's first ticket. The reviewer and verifier then judge only this ticket's commits.
-4. Do step 6 for it straight away, so its branch is on `origin` before the next PR targets it, and its PR exists before a later segment builds against it.
+4. Do steps 5b and 6 for it straight away, so its branch is on `origin` before the next PR targets it, and its PR exists before a later segment builds against it.
 5. Continue only when the runner returned `DONE` (a `DONE` that opened a draft only for `UPSTREAM_BLOCKERS` counts). Otherwise report each remaining ticket in the chain as `waits on <identifier>`. Their worktrees are not created.
+
+## 5b. Code review (per `DONE` ticket, before its PR)
+
+When a runner returns `DONE`, review its branch with Claude Code's built-in `code-review` skill before the PR opens. A round is one review, then one fix. Run at most 2 rounds, and stop early when a review finds nothing:
+
+1. `cd "<worktree>"`. The skill reviews the branch checked out where it runs, so it must start in the ticket's worktree.
+2. Invoke the Skill tool with skill `code-review` and args `medium`. Never pass `--fix` or `--comment`: fixes go through the executor, and GitHub writes go through `wf-github`.
+3. `cd "<ROOT>"` as soon as the call returns, even when the review keeps running in the background. Every other step assumes you are at `ROOT`.
+4. When the findings arrive, spawn `wf-executor` in the worktree with them as the fix list, plus `CONTEXT_PACK` and `REPO_GUIDANCE`. It fixes the real ones and lists the rest under `DECLINED`.
+
+Keep the counts (rounds, findings fixed, findings declined) for the PR body and the final report. If the skill isn't available, skip this step and say so in the report.
 
 ## 6. PR + ticket comment (per ticket)
 
@@ -168,13 +185,14 @@ For each independent ticket in the parallel set, spawn `wf-runner` with its `GOA
 - **Umbrella.** When a ticket is a sub-issue that step 1a split out or resumed, spawn `wf-linear` `SET_STATUS <umbrella> "In Progress"` once, when its first sub-issue reaches this step.
 - **Empty guard:** `git -C "<path>" rev-list --count "<diff base>..HEAD"` must be > 0 (the diff base from step 5). If it is 0, open no PR and treat the ticket as `BLOCKED: no changes made`.
 - **`DONE` with `UPSTREAM_BLOCKERS`** (not `none`) → `CREATE_PR` with `DRAFT: true`, and fill the `## Blocked on` section. A ready PR would invite a merge against a stand-in. The ticket stays In Progress and skips the CI stage. In a chain, the next ticket still continues, because this ticket's code is verified.
+- **`DONE` whose `NOTES` report a generator that failed** (a file the repo must generate was left out) → handle it like `UPSTREAM_BLOCKERS`: a draft PR whose `## Blocked on` names the missing file and the exact command that makes it.
 - **`DONE`** → spawn `wf-github` `CREATE_PR` (ready for review) with the worktree path, the PR base, `HEAD`, title and body (template below). Capture `PR_URL`.
 - **`NEEDS_HUMAN`** → `CREATE_PR` with `DRAFT: true`. The body adds the `## Unresolved` section listing the runner's remaining items. The ticket stays In Progress.
 - **`BLOCKED`** (the abandon path) → open no PR. Spawn `wf-linear` `POST_COMMENT <id>` with: `🤖 /wf stopped on this ticket`, the reason, what was tried, and what a next attempt needs. The ticket stays In Progress and the worktree is kept.
-- For `DONE` and `NEEDS_HUMAN`, spawn `wf-linear` `POST_COMMENT <id>` (this replaces a bare PR link):
+- For every PR, post the ticket comment with `wf-linear` `POST_COMMENT <id>` (this replaces a bare PR link). Post it now for a draft. For a PR opened ready, post it when its review stage (7b) ends, so the status is the real result. `<status>` is one of `ready for review, CI and review bots green`, `ready for review, CI still running`, `ready for review, partial CI until <parent PR> merges`, or `draft: <one-line reason>`.
 
   ```
-  🤖 /wf opened <PR_URL> (<ready for review | draft — needs a human>)
+  🤖 /wf opened <PR_URL> (<status>)
 
   **Definition of done**
   <DEFINITION_OF_DONE bullets>
@@ -190,30 +208,33 @@ For each independent ticket in the parallel set, spawn `wf-runner` with its `GOA
 
 Local checks are scoped to changed files. CI is the full check, so it is the finish line.
 
-**Stacked PRs.** Many repos run CI only on PRs that target the default branch. So a stacked PR often gets `NONE`. Report its CI as `after <parent PR> merges`, not `none`, and still set In Review. After a CI fix on a chain ticket, bring the fix into each later ticket in the chain, in order: `git -C "<next worktree>" merge --no-edit "<fixed branch>"`, then `wf-github` `PUSH`. Never rebase or force-push. On a merge conflict, run `git -C "<next worktree>" merge --abort`, then `wf-github` `COMMENT_PR` on the next PR saying it needs the parent's fix merged in by hand.
+**Stacked PRs get partial CI.** Many repos run their main workflows (tests, type check, build, PR-title lint) only on PRs that target the default branch, while lint and review bots still run. drata/api does this. So `PASS` or `NONE` on a stacked PR is never full CI. Still fix what fails and handle bot findings. Then report its CI as `partial until <parent PR> merges` and leave the ticket In Progress: _On merge_ runs this stage again once the PR targets `BASE`. After a CI fix on a chain ticket, bring the fix into each later ticket in the chain, in order: `git -C "<next worktree>" merge --no-edit "<fixed branch>"`, then `wf-github` `PUSH`. Never rebase or force-push. On a merge conflict, run `git -C "<next worktree>" merge --abort`, then `wf-github` `COMMENT_PR` on the next PR saying it needs the parent's fix merged in by hand.
 
 For every PR opened ready in step 6, loop:
 
-1. Spawn `wf-github` `CHECKS <pr>` (one spawn per PR, all in one message). It watches for up to about 9 minutes and returns `PASS`, `NONE`, `PENDING`, or `FAIL` with each failing check and a log excerpt.
-2. **`PASS` / `NONE`** → go to the review stage (7b). Green CI alone is not done: review bots finish as checks, and a passing check can still carry findings ("Completed with 2 issues").
+1. Spawn `wf-github` `CHECKS <pr>` (one spawn per PR, all in one message). It watches for up to about 9 minutes and returns `PASS`, `NONE`, `PENDING`, or `FAIL` with each failing check and a log excerpt. Once the checks settle, it also returns `BOT_FINDINGS`: review threads that bots (Unblocked, an AppSec reviewer) opened and nobody resolved. Those bots pass their own check even when they leave findings, so a green rollup alone isn't the finish line. A thread counts as new only if you haven't handed it to the executor in an earlier round.
+2. **`PASS` / `NONE` with no new `BOT_FINDINGS`** → go to the review stage (7b). `BOT_FINDINGS: unknown` doesn't block; note it in the report.
 3. **`PENDING`** → call `CHECKS` again, up to 6 calls (about 1 hour). If it is still pending, set In Review anyway and note `CI still running` in the report.
 4. **`FAIL` on a PR-metadata check** (the failing check lints the PR title or description, e.g. "Validate PR Title"): no code change. Read the error, build a compliant title, and spawn `wf-github` `EDIT_TITLE <pr> "<new title>"`. The check re-runs on its own; go back to 1. This counts toward the fix-round budget.
-5. **`FAIL`** on anything else → spawn `wf-executor` in that worktree with the failing checks and log excerpts as the fix list, plus the `CONTEXT_PACK`. Tell it: fix the failures this diff caused, verify narrowly, commit. If a failure isn't caused by this diff (flaky, infra, already failing on base), return `BLOCKED: unrelated — <evidence>` instead of changing code.
+5. **`FAIL`** on anything else, **or new `BOT_FINDINGS`** → spawn `wf-executor` in that worktree with the failing checks, their log excerpts and the new bot findings as the fix list, plus the `CONTEXT_PACK` and `REPO_GUIDANCE`. Tell it: fix the failures this diff caused, fix the real bot findings and decline the rest with a reason, verify narrowly, commit. If a failure isn't caused by this diff (flaky, infra, already failing on base), return `BLOCKED: unrelated — <evidence>` instead of changing code.
    - Executor committed → `wf-github` `PUSH`, then go back to 1.
+   - Nothing committed because it declined every finding → the loop ends.
    - `BLOCKED: unrelated` → `wf-github` `RERUN_FAILED <pr>` once (pass the failing check links from `CHECKS`), then go back to 1. A second unrelated failure ends the loop.
-6. **Budget: 3 fix rounds per PR.** If CI is still red after that (or after a second unrelated failure):
+6. **Budget: 3 fix rounds per PR.** If CI is still red, or the bots still raise new findings, after that (or after a second unrelated failure):
    - `wf-github` `MARK_DRAFT <pr>`.
-   - `wf-github` `COMMENT_PR` with the failing checks, what was tried, and whether it looks unrelated to the diff.
+   - `wf-github` `COMMENT_PR` with the failing checks or open findings, what was tried, and whether it looks unrelated to the diff.
    - The ticket stays In Progress.
+
+**When the loop ends with CI green** (including when the executor declined every remaining bot finding), go to the review stage (7b). It answers the bot findings handled here too.
 
 ## 7b. Review stage (every PR whose CI is green)
 
 Reviewers post findings, not just pass/fail: AI review bots (Unblocked), security bots (AppSec, Wiz), scanner annotations, and humans. Read them all before calling a PR ready.
 
 1. Spawn `wf-github` `REVIEWS <pr>`. It returns unresolved threads, review bodies and comments on the current head, and check-run annotations.
-2. **Nothing open** → spawn `wf-linear` `SET_STATUS <id> "In Review"` (Code Review on teams without In Review). Done. If this was the last open sub-issue of an umbrella and every sibling is now In Review, also set the umbrella to In Review, and post one comment on it listing each sub-issue's PR.
-3. **Findings** → spawn `wf-executor` in the worktree with the findings as the fix list, plus the `CONTEXT_PACK`. Tell it: for each finding, either fix it (verify narrowly, commit) or return `DECLINED: <finding> — <reason>` when it is wrong, already handled, out of scope, or needs a human decision. Never weaken a test or a check to satisfy a reviewer.
-4. Push any fix with `wf-github` `PUSH`. Then answer every finding:
+2. **Nothing open, and nothing from the CI stage left to answer** → spawn `wf-linear` `SET_STATUS <id> "In Review"` (Code Review on teams without In Review), except on a stacked PR (see _Stacked PRs_). Linear's GitHub integration may already have moved the ticket when the PR opened; the call is idempotent. Post the ticket comment (step 6) with the real status. Done. If this was the last open sub-issue of an umbrella and every sibling is now In Review, also set the umbrella to In Review, and post one comment on it listing each sub-issue's PR.
+3. **Findings** → hand the executor only findings it hasn't seen: skip any bot thread it already fixed or declined in the CI stage. Spawn `wf-executor` in the worktree with them as the fix list, plus the `CONTEXT_PACK` and `REPO_GUIDANCE`. Tell it: for each finding, either fix it (verify narrowly, commit) or return it under `DECLINED` with a reason. Never weaken a test or a check to satisfy a reviewer.
+4. Push any fix with `wf-github` `PUSH`. Then answer every finding, including the bot findings the CI stage fixed or declined:
    - Fixed → `REPLY_THREAD` with "Fixed in <short sha>: <one line>". For a bot's thread, also `RESOLVE_THREAD`.
    - Declined → `REPLY_THREAD` (or `COMMENT_PR` for a finding with no thread) with the reason. Leave the thread open.
    - Never resolve a human's thread. The human resolves it.
@@ -221,7 +242,7 @@ Reviewers post findings, not just pass/fail: AI review bots (Unblocked), securit
 6. **Security gate.** A finding from a security reviewer (AppSec, Wiz, any check named for security) rated High or Critical, or with no rating, is never declined automatically. If the executor can't fix it, `MARK_DRAFT`, list it under `## Needs human review`, and leave the ticket In Progress.
 7. Review rounds share the CI stage's budget of 3 fix rounds per PR. When it runs out with findings still open, the PR stays ready only if every open finding has a reply. Otherwise `MARK_DRAFT` and leave the ticket In Progress.
 
-## PR description template (simple and short — hard budget: ≤10 body lines, excluding the Stacked on / Blocked on / Decisions / Needs human review / Unresolved / After apply lists)
+## PR description template (simple and short — hard budget: ≤10 body lines, excluding the Stacked on / Depends on / Blocked on / Decisions / Needs human review / Review findings not changed / Unresolved / After apply lists)
 
 Write the shortest body that lets a reviewer approve with confidence. Short is the goal, not a limit to work around. If you are wondering whether a line is needed, it is not.
 
@@ -242,13 +263,16 @@ Write the shortest body that lets a reviewer approve with confidence. Short is t
 - <terse bullet per meaningful change — max 5> (omit when the diff touches ≤2 files)
 
 ## Verification
-<one line, results only — e.g. "changed-file lint clean; related tests 12/12 pass; left to CI: e2e checkout flow"> (name the runner's LEFT_TO_CI items)
+<one line, results only — e.g. "changed-file lint clean; related tests 12/12 pass; review: 1 runner round, 2 code-review rounds (5 fixed, 1 declined); left to CI: e2e checkout flow"> (name the runner's LEFT_TO_CI items and the review rounds)
 
 ## Decisions made
 - <each SPEC_GAPS entry: question → decision>   (omit if none)
 
 ## Needs human review
 - <each runner HUMAN_REVIEW line — auth, permissions, tenant scoping, customer data, secrets>   (omit if none)
+
+## Review findings not changed
+- <each code-review finding the executor declined: where, what, why>   (omit if none)
 
 ## Unresolved
 - <runner's remaining items>   (draft PRs only)
@@ -281,14 +305,14 @@ Rewrite any agent output you quote to this standard.
 
 ## After all tickets
 
-Print a table: identifier → repo → PR URL → CI (`green` / `none` / `running` / `red` / `after <PR> merges`) → reviews (`<n> fixed / <n> declined / <n> open`) → Linear state → time (plan / execute / CI, in minutes, from your stage timestamps) → note. List chain tickets in chain order, and note `stacked on <identifier>` or `depends on <PR>` on each later one. Group a split ticket's sub-issues under a row for its umbrella, and say which sub-issues this run created. Then list, only where non-empty:
+Print a table: identifier → repo → PR URL → CI (`green` / `none` / `running` / `red` / `partial until <PR> merges`) → review (rounds, and findings fixed / declined / open, for the runner, the code review, the review bots and the review stage) → Linear state → time (plan / execute / review / CI, in minutes, from your stage timestamps) → note. List chain tickets in chain order, and note `stacked on <identifier>` or `depends on <PR>` on each later one. Group a split ticket's sub-issues under a row for its umbrella, and say which sub-issues this run created. Then list, only where non-empty:
 
 - **Parked:** questions are on the ticket. Answer there, then re-run `/wf <id>`.
 - **Waiting:** tickets dropped because a ticket they depend on didn't finish, with the `/wf` command that runs them together.
 - **Blocked upstream:** each draft PR waiting on a release or change elsewhere, with what it needs.
 - **Needs a human:** each draft PR or blocked ticket, with its one-line reason.
 - **Defaults taken:** any question you answered with its ✅ option because the reply was blank or ambiguous.
-- **Repo instruction gaps:** the distinct `INSTRUCTION_GAPS` across tickets, under the heading "Add to this repo's CLAUDE.md so the next run doesn't have to guess". These are suggestions. Never edit the repo's instructions yourself.
+- **Repo instruction gaps:** the distinct `INSTRUCTION_GAPS` across tickets, plus each review finding (runner reviewer, code review, review bots) that a written repo rule would have prevented, stated as that rule. Put them under the heading "Add to this repo's instructions so the next run doesn't have to guess". Written rules are what stop the next run from paying for the same fix. These are suggestions. Never edit the repo's instructions yourself, and say where the repo keeps its rules when it isn't `CLAUDE.md` (drata/api: through its `llm-search` agent).
 
 Remind the user that review and merge happen on GitHub, by a human. When a PR is merged, they tell you ("ENG-123 is merged") and you run _On merge_.
 
@@ -306,7 +330,7 @@ For each merged `<identifier>`:
    - `git branch -d "<branch>"`. Use `-D` only if git refuses and the user confirms.
    - `git worktree prune`.
    - `rm -rf "ROOT/.worktrees/.handoffs/<identifier>"`.
-5. **Next PR in a stack.** Spawn `wf-github` `RETARGET "<branch>" "<BASE>"`. For each PR it retargeted (or that GitHub already moved), find its worktree (`git worktree list`, by its head branch) and bring in the merged code: `git -C "<worktree>" fetch origin`, then `git -C "<worktree>" merge --no-edit "origin/<BASE>"`, then `wf-github` `PUSH`. This keeps the next PR's diff to its own changes after a squash merge. Never rebase or force-push. On a conflict, `merge --abort` and tell the user.
+5. **Next PR in a stack.** Spawn `wf-github` `RETARGET "<branch>" "<BASE>"`. For each PR it retargeted (or that GitHub already moved), find its worktree (`git worktree list`, by its head branch) and bring in the merged code: `git -C "<worktree>" fetch origin`, then `git -C "<worktree>" merge --no-edit "origin/<BASE>"`, then `wf-github` `PUSH`. This keeps the next PR's diff to its own changes after a squash merge. Never rebase or force-push. On a conflict, `merge --abort` and tell the user. Then run the CI stage (step 7) for that PR. It now gets full CI, and green moves its ticket to In Review.
 6. Confirm: `<identifier> → <state wf-linear reported>, worktree + branch removed`, plus any retargeted PRs.
 
 Never clean up a worktree whose PR has not been confirmed merged.
@@ -326,6 +350,7 @@ Never clean up a worktree whose PR has not been confirmed merged.
 - **A `[<repo>]` title prefix skips scoping.** A prefixed ticket always builds in that one repo. Leave the prefix off when a ticket may need more than one.
 - **Scoping costs one planner pass per unprefixed ticket**, even when the answer is the current repo. It's read-only and stops as soon as the repos are clear.
 - **The overlap guard prevents racing, not merge conflicts,** and it is only as good as the planner's `files in play`.
-- **`wf-runner` is the single inner loop** (execute → concurrent review+verify → ≤2 fix rounds). Loop policy changes go in `wf-runner.md` only.
-- **CI and review-finding fixes skip the reviewer.** They are narrow, and the human review on the PR covers them.
+- **`wf-runner` is the single inner loop** (execute → concurrent review+verify → ≤2 fix rounds). Its loop policy changes go in `wf-runner.md` only. The code review (step 5b), the CI stage (step 7) and the review stage (step 7b) run after it, from here.
+- **CI and review-finding fixes skip the reviewer and the code review.** They are narrow, and the review bots and the human review on the PR cover them.
+- **Draft PRs may get no CI.** Some repos (drata/api) skip CI on drafts, so a draft PR is checked only locally until someone marks it ready.
 - **Local verification is scoped to changed files.** A break elsewhere surfaces in CI, and the CI stage then fixes it.

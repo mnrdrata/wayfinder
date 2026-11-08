@@ -34,11 +34,15 @@ The only exception is a ticket with no workable goal at all. Its questions go to
 
 There is no generated manual and no setup step per repo. The Opus planner reads the repo's own `CLAUDE.md`/`AGENTS.md` (root and nested), `CONTRIBUTING`/`README`, manifests and CI config. It distils them into one dense `CONTEXT_PACK`.
 
-The cheaper downstream agents work from that pack and never re-explore. When the repo's instructions were missing something the planner had to dig for, the run ends with suggested additions to the repo's `CLAUDE.md`. That way the fix lands in the repo where every engineer's agents benefit.
+The cheaper downstream agents work from that pack and never re-explore. When the repo's instructions were missing something the planner had to dig for, the run ends with suggested additions to the repo's instructions. The same goes for review findings a written rule would have prevented. That way the fix lands in the repo where every engineer's agents benefit.
+
+Some repos keep their rules behind their own agent and block other agents from reading the guidance files. drata/api does this with `llm-search`. The workflow's agents can't spawn agents, so `/wf` consults the repo's knowledge agent itself before planning. It passes the answer to the planner, executor and reviewer as `REPO_GUIDANCE`.
 
 ### Local checks are scoped; CI is the finish line
 
-Locally, agents lint, type-check and test only what the change touches. Whole-repo suites and e2e tests are slow on large repos, and CI runs them anyway. After the PR opens, `/wf` watches CI, feeds failures back to the executor, and pushes fixes. A ticket is finished when its PR has green CI.
+Locally, agents lint, type-check and test only what the change touches. Whole-repo suites and e2e tests are slow on large repos, and CI runs them anyway. Before the PR opens, Claude Code's built-in `/code-review` runs up to 2 review and fix rounds on the branch.
+
+After the PR opens, `/wf` watches CI, feeds failures back to the executor, and pushes fixes. Review bots such as Unblocked and an AppSec reviewer pass their own check even when they leave findings, so `/wf` also fixes their unresolved review threads. A ticket is finished when its PR has green CI and no open bot findings.
 
 ## Agents (9)
 
@@ -47,7 +51,7 @@ Reasoning agents:
 | Agent | Model | Job |
 |---|---|---|
 | `wf-planner` | opus | Reads the repo's instructions and code, drafts the definition of done, decides open questions, emits the plan + `CONTEXT_PACK` |
-| `wf-executor` | sonnet | Implements the plan with atomic commits; also fixes failing CI checks |
+| `wf-executor` | sonnet | Implements the plan with atomic commits; also fixes failing CI checks and review findings |
 | `wf-reviewer` | opus | Reviews the diff coverage-first; flags auth/permissions/customer-data changes for human eyes |
 | `wf-verifier` | sonnet | Runs scoped lint/type/test checks and proves each definition-of-done item |
 | `wf-spec-builder` | opus | Optional, interactive: turns a thin ticket into a spec with you (`/wf-spec`) |
@@ -57,7 +61,7 @@ Boundary agents, each the single owner of one external system:
 | Agent | Model | Owns |
 |---|---|---|
 | `wf-linear` | haiku | All Linear MCP calls |
-| `wf-github` | haiku | All `gh` calls, including watching CI and fetching failure logs |
+| `wf-github` | haiku | All `gh` calls, including watching CI, fetching failure logs and listing open review-bot findings |
 
 Orchestration and evals:
 
@@ -78,12 +82,13 @@ flowchart TD
   PL -->|UNCLEAR| Q[Questions posted to Linear, ticket parked]
   PL -->|PLAN| G[Overlap guard: split by files in play]
   G --> R[wf-runner, up to 3 at once: execute, review + verify, fix rounds]
-  R -->|DONE| PR[Open PR + Linear comment]
+  R -->|DONE| CR[Built-in /code-review: up to 2 review + fix rounds]
+  CR --> PR[Open PR]
   R -->|NEEDS_HUMAN| D[Draft PR with unresolved items]
   R -->|BLOCKED| B[Linear comment: what was tried, no PR]
-  PR --> CI{CI checks}
-  CI -->|red, up to 3 rounds| X[wf-executor fixes, push] --> CI
-  CI -->|green or none| IR[Ticket In Review]
+  PR --> CI{CI checks + review-bot findings}
+  CI -->|red or new findings, up to 3 rounds| X[wf-executor fixes, push] --> CI
+  CI -->|green, no new findings| IR[Ticket In Review + Linear comment]
   CI -->|still red| D
 ```
 
@@ -91,7 +96,7 @@ flowchart TD
 
 Every ticket in a run ends in exactly one of three states.
 
-**Finished.** The PR is ready for review, CI is green (or the repo has no CI), and the ticket is *In Review*. The PR body lists the decisions made and any areas that need a human look.
+**Finished.** The PR is ready for review, CI is green (or the repo has no CI) with no open review-bot findings, and the ticket is *In Review*. The PR body lists the decisions made and any areas that need a human look.
 
 **Needs a human.** The PR is a draft (or there is no PR), with the reasons written on it and on the ticket. The ticket stays *In Progress* and the worktree is kept. Re-running `/wf <id>` resumes.
 
@@ -116,9 +121,9 @@ Two guards keep this safe. `wf-linear` never sets a completed-type state, and it
 - **Fail-fast preflight.** Nothing is touched until git, `gh`, Linear and the sandbox all check out.
 - **Honest status.** A ticket moves to *In Progress* only after it has a plan, and to *In Review* only after CI passes.
 - **Resumable.** An existing worktree for the ticket is reused, never recreated or deleted.
-- **Bounded loops.** At most 2 review/verify fix rounds and 3 CI fix rounds per ticket. An unrelated CI failure gets one rerun, not code changes.
+- **Bounded loops.** At most 2 review/verify fix rounds, 2 code-review rounds and 3 CI fix rounds (bot findings included) per ticket. An unrelated CI failure gets one rerun, not code changes.
 - **Empty-PR guard.** A branch with no commits beyond base never gets a PR.
-- **Stacking only for linked tickets.** Tickets linked with Linear "blocked by" and run in the same `/wf` form a chain. One planner plans the whole chain. The tickets build in order as stacked PRs, each branching from the one before it. Every other ticket branches from base.
+- **Stacking only for linked tickets.** Tickets linked with Linear "blocked by" and run in the same `/wf` form a chain. One planner plans the whole chain. The tickets build in order as stacked PRs, each branching from the one before it. Every other ticket branches from base. A stacked PR's CI counts as partial until its parent merges, because many repos (drata/api among them) run tests, type check and build only on PRs to the default branch.
 - **Upstream blockers are drafts.** When a change needs an unreleased package or a change in another repo, its PR opens as a draft that names what it waits on.
 
 ## On merge
