@@ -272,10 +272,19 @@ Reviewers post findings, not just pass/fail: AI review bots (Unblocked), securit
 Some repos publish packages other repos install. drata/platform publishes `@drata/enums` and `@drata/types`. A downstream repo can't build against a change there until it's published, so a ready PR in such a repo publishes a prerelease from its own branch.
 
 - **When:** the ticket's repo has a `prerelease` block in `REPOS` (`workflow`, and `packages_dir`, default `packages`), its PR is ready with CI green and nothing open, and the diff touches `<packages_dir>/<package>/`. Skip draft PRs.
+- **Restore the version first.** The publish workflow owns the version. If the branch changed `"version"` in `<packages_dir>/<package>/package.json` compared with `origin/<BASE>` (a hand bump, usually from a review finding), the workflow takes it for a retry and publishes it as a **stable `latest` release**. So before dispatching:
+
+  1. Put back BASE's version.
+  2. Commit it as `chore(<package>): leave the version to the publish workflow [<identifier>]`.
+  3. Push from the main thread.
+
+  A version that's already a `-<ticket>.<n>` prerelease from an earlier run is fine as is.
+
 - **How:** for each touched package, `wf-github` (or `github-cli:cli`) runs `~/.claude/bin/wf-prerelease <owner/repo> <workflow> <branch> <package> <identifier>`. It starts the publish workflow with `release_type=prerelease` on the PR branch, waits for it, and prints `PRERELEASE @drata/<package>@<version>`. The workflow pushes a version commit to the branch, so afterwards run `git -C "<worktree>" pull --ff-only`.
 - **Record it:** add a `**Prerelease:**` line per package to the ticket comment (step 6). The downstream repo's session reads it there (step 1b).
 - **The PR body** gets `## After apply (manual, required)`: `1. After this merges, publish a release of <package> and bump the downstream repo from the prerelease to it.`
-- **`PRERELEASE_FAILED`:** note it on the ticket comment with the run link. The ticket still finishes. A downstream session then finds no prerelease and opens its PR as a draft that is blocked on the release.
+- **`PRERELEASE_FAILED version-not-a-prerelease:<v>`** means the workflow published a stable `<v>` from an unmerged branch. Never deprecate or unpublish it yourself. The ticket finishes `needs-human`. The ticket comment names the version and gives two options: keep it if the PR will merge unchanged, or deprecate it and bump past it. It has no `**Prerelease:**` line, so no downstream session builds on it.
+- **Any other `PRERELEASE_FAILED`:** note it on the ticket comment with the run link. The ticket still finishes. A downstream session then finds no prerelease and opens its PR as a draft that is blocked on the release.
 
 ## PR description template (simple and short — hard budget: ≤10 body lines, excluding the Stacked on / Depends on / Blocked on / Decisions / Needs human review / Review findings not changed / Unresolved / After apply lists)
 
